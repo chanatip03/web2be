@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from app.api.v1 import api_router
-from app.api.security_scan import router as security_router
+from app.api.security_scan import security_router
 
 app = FastAPI(title="WEB2 API")
 

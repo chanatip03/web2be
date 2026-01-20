@@ -20,7 +20,7 @@ services:
 
   scanner:
     build: .
-    container_name: student-scanner
+    container_name: web2-student-scanner
     ports:
       - "8000:8000"
     volumes:
