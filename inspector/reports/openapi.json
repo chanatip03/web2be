@@ -1,0 +1,18 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Unified Auto Generated API",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/wrong_path/{param}": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Auto discovered"
+          }
+        }
+      }
+    }
+  }
+}

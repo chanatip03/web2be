@@ -1,0 +1,48 @@
+{
+  "assignment_name": "Todo API Assignment",
+  "total_points": 100,
+  "endpoints": [
+    {
+      "name": "Get All Todos",
+      "path": "/api/todos",
+      "method": "GET",
+      "score": 30,
+      "required_fields": ["id", "title", "completed"],
+      "expected_status": 200
+    },
+    {
+      "name": "Create Todo",
+      "path": "/api/todos",
+      "method": "POST",
+      "score": 30,
+      "required_fields": ["id", "title", "completed"],
+      "expected_status": 201,
+      "request_body": {
+        "title": "Test Todo",
+        "completed": false
+      }
+    },
+    {
+      "name": "Get Single Todo",
+      "path": "/api/todos/1",
+      "method": "GET",
+      "score": 20,
+      "required_fields": ["id", "title", "completed"],
+      "expected_status": 200
+    },
+    {
+      "name": "Delete Todo",
+      "path": "/api/todos/1",
+      "method": "DELETE",
+      "score": 20,
+      "expected_status": [200, 204]
+    }
+  ],
+  "bonus_checks": [
+    {
+      "name": "Has OpenAPI Documentation",
+      "check": "openapi_exists",
+      "score": 10
+    }
+  ]
+}

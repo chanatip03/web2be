@@ -1,0 +1,7 @@
+{
+  "score": 0,
+  "checked": 1,
+  "details": [
+    "GET /wrong_path/{param} FAILED"
+  ]
+}

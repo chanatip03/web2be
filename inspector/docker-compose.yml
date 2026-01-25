@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  inspector:
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile.fastapi
+    volumes:
+      - ./submissions:/submissions:ro
+      - ./reports:/reports
+    ports:
+      - "9000:9000"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
