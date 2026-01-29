@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 
-from app.core.security import verify_password
+from app.utils.generate_token import verify_password
 from . import repository
 
 
