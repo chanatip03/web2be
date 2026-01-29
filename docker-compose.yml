@@ -1,3 +1,5 @@
+version: "3.8"
+
 services:
   database:
     container_name: web2-database
@@ -11,7 +13,37 @@ services:
     volumes:
       - ./databasepg:/var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -h localhost -U admin -d web2" ]
+      test: ["CMD-SHELL", "pg_isready -h localhost -U admin -d web2"]
       interval: 10s
       timeout: 5s
       retries: 5
+
+  scanner:
+    build: .
+    container_name: web2-student-scanner
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data/submissions:/app/data/submissions:ro
+      - ./data/security_scan_results:/app/data/security_scan_results
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data/submissions:/host/data/submissions:ro
+    environment:
+      SNYK_TOKEN: ${SNYK_TOKEN}
+      SNYK_IMAGE: ${SNYK_IMAGE:-student-snyk-code:1.0}
+      SUBMISSIONS_DIR: /app/data/submissions
+      RESULTS_DIR: /app/data/security_scan_results
+      HOST_SUBMISSIONS_BASE: /host/data/submissions
+
+      DATABASE_HOST: database
+      DATABASE_PORT: 5432
+      DATABASE_NAME: web2
+      DATABASE_USER: admin
+      DATABASE_PASSWORD: admin
+    env_file:
+      - .env
+    working_dir: /app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      database:
+        condition: service_healthy
