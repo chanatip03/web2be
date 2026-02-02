@@ -17,12 +17,28 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def create_access_token(data: dict):
-    expire_minutes = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 60)) 
+    expire_minutes = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 60))
     expire = datetime.utcnow() + timedelta(minutes=expire_minutes)
-    data.update({"exp": expire})
-    token = jwt.encode(data, os.getenv("SECRET_KEY"), algorithm="HS256")
+
+    payload = dict(data)
+    if "userId" not in payload:
+        if "sub" in payload:
+            payload["userId"] = payload.get("sub")
+        elif "id" in payload:
+            payload["userId"] = payload.get("id")
+
+    if "role" not in payload:
+        if "type" in payload:
+            payload["role"] = payload.get("type")
+
+    exp_ts = int(expire.timestamp())
+    payload["exp"] = exp_ts
+
+    algorithm = os.getenv("HASH_ALGORITHM", "HS256")
+    token = jwt.encode(payload, os.getenv("SECRET_KEY"), algorithm=algorithm)
     return token
 
 
 def decode_token(token: str):
-    return jwt.decode(token, os.getenv("SECRET_KEY"), algorithms=[os.getenv("ALGORITHM")])
+    algorithm = os.getenv("HASH_ALGORITHM", "HS256")
+    return jwt.decode(token, os.getenv("SECRET_KEY"), algorithms=[algorithm])

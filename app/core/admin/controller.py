@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from db.database import get_db
+from app.db.database import get_db
 from .dto import CreateAdminRequest
 from .service import create_admin
 

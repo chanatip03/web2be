@@ -125,3 +125,4 @@ class Teacher(Base):
     updated_date = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     deleted_date = Column(DateTime(timezone=True), nullable=True)
     user = relationship("User", back_populates="teacher")
+

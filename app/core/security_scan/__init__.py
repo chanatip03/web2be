@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.security_scan.controller import router as security_router
+from app.core.security_scan.controller import router as security_router
 
 api_router = APIRouter()
 
