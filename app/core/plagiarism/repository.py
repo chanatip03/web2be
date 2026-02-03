@@ -2,9 +2,9 @@ import os
 
 BASE_PATH = os.getcwd()
 
-WORK_DIR = os.path.abspath(os.path.join(BASE_PATH, "app", "data", "submissions"))
+WORK_DIR = os.path.abspath(os.path.join(BASE_PATH, "app" ,"data", "submissions"))
 
-RESULT_DIR = os.path.abspath(os.path.join(BASE_PATH, "app", "data", "results"))
+RESULT_DIR = os.path.abspath(os.path.join(BASE_PATH, "app" ,"data", "results"))
 
 def ensure_result_dir():
     os.makedirs(RESULT_DIR, exist_ok=True)

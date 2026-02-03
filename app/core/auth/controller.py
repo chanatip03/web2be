@@ -1,10 +1,10 @@
-from datetime import datetime, timedelta
-from fastapi import Response, APIRouter, Depends, HTTPException, status
+from datetime import datetime, timezone
+from fastapi import Request, Response, APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from .dto import LoginRequest, Token
 from .service import authenticate_admin, authenticate_user
-from app.utils.generate_token import create_access_token
+from app.utils.generate_token import create_access_token , decode_token
 from app.utils.otp import (
     generate_otp,
     hash_otp,
@@ -13,10 +13,9 @@ from app.utils.otp import (
     get_otp_memory,
     delete_otp_memory,
     save_otp_verification,
-)
-from app.models.schema import User
+    )
 
-router = APIRouter(prefix="/auth")
+router = APIRouter(prefix="/auth" , tags=["auth"])
 
 
 def _set_token_cookie(response: Response, token: str):
@@ -30,7 +29,7 @@ def _set_token_cookie(response: Response, token: str):
     )
 
 
-@router.post("/login/admin", response_model=Token)
+@router.post("/login-admin", response_model=Token)
 def admin_login(data: LoginRequest, response: Response, db: Session = Depends(get_db)):
     admin = authenticate_admin(db, data.email, data.password)
     if not admin:
@@ -42,31 +41,22 @@ def admin_login(data: LoginRequest, response: Response, db: Session = Depends(ge
 
 
 @router.post("/login", response_model=Token)
-def login(data: LoginRequest, response: Response, db: Session = Depends(get_db), role: str | None = None):
+def login(data: LoginRequest, response: Response, db: Session = Depends(get_db)):
     user = authenticate_user(db, data.email, data.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    role_names = [r.name.value if hasattr(r.name, "value") else str(r.name) for r in (user.roles or [])]
-    role_names = [r.lower() for r in role_names]
+    if not user.roles or len(user.roles) != 1:
+        raise HTTPException(
+            status_code=500,
+            detail="User must have exactly one role"
+        )
 
-    # If client requested a specific role, ensure user has it
-    if role:
-        role_lower = role.lower()
-        if role_lower not in role_names:
-            raise HTTPException(status_code=403, detail=f"User does not have role '{role}'")
-        chosen_role = role_lower
-    else:
-        # auto-select when user has exactly one of student/teacher
-        candidate_roles = [r for r in role_names if r in ("student", "teacher")]
-        if len(candidate_roles) == 1:
-            chosen_role = candidate_roles[0]
-        elif len(candidate_roles) == 0:
-            raise HTTPException(status_code=403, detail="User has no student/teacher role")
-        else:
-            raise HTTPException(status_code=400, detail="Multiple roles found; specify 'role' parameter")
+    role = user.roles[0].name
+    role_name = role.value if hasattr(role, "value") else str(role)
+    role_name = role_name.lower()
 
-    token = create_access_token({"userId": str(user.id), "role": chosen_role})
+    token = create_access_token({"userId": str(user.id), "role": role_name})
     _set_token_cookie(response, token)
     return {"access_token": token}
 
@@ -85,12 +75,12 @@ async def request_otp(email: str):
 
 
 @router.post("/verify-otp")
-async def verify_otp(email: str, otp: str, db: Session = Depends(get_db)):
+async def verify_otp(email: str, otp: str):
     data = get_otp_memory(email)
     if not data:
         raise HTTPException(status_code=400, detail="OTP not found")
 
-    if datetime.utcnow() > data["expires"]:
+    if  datetime.now(timezone.utc) > data["expires"]:
         delete_otp_memory(email)
         raise HTTPException(status_code=400, detail="OTP expired")
 
@@ -107,4 +97,17 @@ async def verify_otp(email: str, otp: str, db: Session = Depends(get_db)):
 
     delete_otp_memory(email)
     return {"message": "OTP verified"}
+
+@router.post("/check-user-token")
+async def check_user_token(request: Request):
+    token = request.cookies.get("access_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="No access token")
+    
+    try:
+        payload = decode_token(token)
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
 

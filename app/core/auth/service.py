@@ -2,11 +2,9 @@ from sqlalchemy.orm import Session
 
 from app.utils.generate_token import verify_password
 from . import repository
-from app.models.schema import User
-
 
 def authenticate_user(db: Session, email: str, password: str):
-    user = db.query(User).filter(User.email == email).first()
+    user = repository.get_user_by_email(db, email)
     if not user:
         return None
 
