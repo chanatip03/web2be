@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta , timezone
 from jose import jwt
 from passlib.context import CryptContext
 from dotenv import load_dotenv
@@ -18,7 +18,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def create_access_token(data: dict):
     expire_minutes = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 60))
-    expire = datetime.utcnow() + timedelta(minutes=expire_minutes)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=expire_minutes)
 
     payload = dict(data)
     if "userId" not in payload:

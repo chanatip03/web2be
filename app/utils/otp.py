@@ -5,7 +5,7 @@ import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta ,timezone
 
 load_dotenv()
 
@@ -54,7 +54,7 @@ def send_otp_email(to_email: str, otp: str):
 def save_otp_memory(email: str, otp_hash: str, ttl_minutes: int = 5):
     otp_store[email] = {
         "otp": otp_hash,
-        "expires": datetime.utcnow() + timedelta(minutes=ttl_minutes),
+        "expires": datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes),
         "attempts": 0,
     }
 
@@ -68,7 +68,7 @@ def delete_otp_memory(email: str):
 
 
 def save_otp_verification(email: str):
-    verified_store[email] = {"verified_at": datetime.utcnow().isoformat()}
+    verified_store[email] = {"verified_at": datetime.now(timezone.utc).isoformat()}
 
 
 def get_otp_verification(email: str):
