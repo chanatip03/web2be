@@ -51,11 +51,12 @@ def send_otp_email(to_email: str, otp: str):
         server.send_message(msg)
 
 
-def save_otp_memory(email: str, otp_hash: str, ttl_minutes: int = 5):
+def save_otp_memory(email: str, otp_hash: str, payload: dict, ttl_minutes: int = 5):
     otp_store[email] = {
         "otp": otp_hash,
         "expires": datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes),
         "attempts": 0,
+        "payload": payload,
     }
 
 

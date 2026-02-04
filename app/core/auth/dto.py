@@ -1,4 +1,5 @@
-from pydantic import BaseModel
+from typing import Literal
+from pydantic import BaseModel, EmailStr
 
 class Token(BaseModel):
     access_token: str

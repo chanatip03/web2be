@@ -1,7 +1,10 @@
 from datetime import datetime, timezone
-from fastapi import Request, Response, APIRouter, Depends, HTTPException
+import uuid
+from fastapi import File, Form, Request, Response, APIRouter, Depends, HTTPException, UploadFile
+from pydantic import EmailStr
 from sqlalchemy.orm import Session
 from app.db.database import get_db
+from app.utils.r2 import upload_file
 from .dto import LoginRequest, Token
 from .service import authenticate_admin, authenticate_user
 from app.utils.generate_token import create_access_token , decode_token
@@ -12,8 +15,9 @@ from app.utils.otp import (
     save_otp_memory,
     get_otp_memory,
     delete_otp_memory,
-    save_otp_verification,
     )
+from app.core.student.service import create_student
+from app.core.teacher.service import create_teacher
 
 router = APIRouter(prefix="/auth" , tags=["auth"])
 
@@ -62,41 +66,106 @@ def login(data: LoginRequest, response: Response, db: Session = Depends(get_db))
 
 
 @router.post("/request-otp")
-async def request_otp(email: str):
+async def request_otp(
+    role: str = Form(...),
+    first_name: str = Form(...),
+    last_name: str = Form(...),
+    email: EmailStr = Form(...),
+    password: str = Form(...),
+    academy: str = Form(...),
+    student_id: str | None = Form(None),
+    certificate: UploadFile | None = File(None),
+):
     otp = generate_otp()
-    save_otp_memory(email, hash_otp(otp))
 
-    try:
-        send_otp_email(email, otp)
-    except Exception:
-        raise HTTPException(status_code=500, detail="Cannot send email")
+    payload_data = {
+        "first_name": first_name,
+        "last_name": last_name,
+        "email": email,
+        "password": password,
+        "academy": academy,
+        "student_id": student_id,
+    }
 
-    return {"message": "OTP sent to email"}
+    if role == "teacher":
+        if not certificate:
+            raise HTTPException(400, "Certificate required")
 
+        content = await certificate.read()
+        key = f"certificates/{uuid.uuid4()}.{certificate.filename.split('.')[-1]}"
+        _, url = upload_file(key, content, content_type=certificate.content_type)
+
+        payload_data["certificate_url"] = url
+
+    save_otp_memory(
+    email=email,
+    otp_hash=hash_otp(otp),
+    payload={
+        "role": role,
+        "data": payload_data
+    }
+)
+    print("SAVE OTP FOR:", email)
+
+    send_otp_email(email, otp)
+    return {"message": "OTP sent"}
 
 @router.post("/verify-otp")
-async def verify_otp(email: str, otp: str):
-    data = get_otp_memory(email)
-    if not data:
+def verify_otp(email: str, otp: str, db: Session = Depends(get_db)):
+    record = get_otp_memory(email)
+    if not record:
         raise HTTPException(status_code=400, detail="OTP not found")
 
-    if  datetime.now(timezone.utc) > data["expires"]:
+    if datetime.now(timezone.utc) > record["expires"]:
         delete_otp_memory(email)
         raise HTTPException(status_code=400, detail="OTP expired")
 
-    if data["otp"] != hash_otp(otp):
-        data["attempts"] = data.get("attempts", 0) + 1
-        if data["attempts"] >= 5:
+    if record["otp"] != hash_otp(otp):
+        record["attempts"] = record.get("attempts", 0) + 1
+        if record["attempts"] >= 5:
             delete_otp_memory(email)
         raise HTTPException(status_code=400, detail="OTP invalid")
 
-    try:
-        save_otp_verification(email)
-    except Exception:
-        pass
+    print("SAVE OTP FOR:", email)
 
-    delete_otp_memory(email)
-    return {"message": "OTP verified"}
+    payload = record["payload"]
+    role = payload["role"]
+    data = payload["data"]
+
+    try:
+        if role == "student":
+            user = create_student(
+                db,
+                data["first_name"],
+                data["last_name"],
+                data["email"],
+                data["password"],
+                data.get("academy"),
+                data.get("student_id"),
+            )
+
+        elif role == "teacher":
+            user = create_teacher(
+                db,
+                data["first_name"],
+                data["last_name"],
+                data["email"],
+                data["password"],
+                data["academy"],
+                data["certificate_url"],
+            )
+        else:
+            raise HTTPException(status_code=400, detail="Invalid role")
+
+    finally:
+        delete_otp_memory(email)
+
+    return {
+        "message": "Register success",
+        "user_id": user.id,
+        "role": role
+    }
+
 
 @router.post("/check-user-token")
 async def check_user_token(request: Request):
