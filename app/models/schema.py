@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -109,6 +110,7 @@ class Student(Base):
     updated_date = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     deleted_date = Column(DateTime(timezone=True), nullable=True)
     user = relationship("User", back_populates="student")
+    classrooms = relationship("ClassroomMember", back_populates="student")
 
 class Teacher(Base):
     __tablename__ = "teachers"
@@ -125,4 +127,80 @@ class Teacher(Base):
     updated_date = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     deleted_date = Column(DateTime(timezone=True), nullable=True)
     user = relationship("User", back_populates="teacher")
+    classrooms = relationship("Classroom", back_populates="teacher")
 
+
+class Classroom(Base):
+    __tablename__ = "classrooms"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False)
+    description = Column(String, nullable=True)
+    semester = Column(String(50), nullable=True)
+    code = Column(String(50), nullable=True)
+    excel_link = Column(String, nullable=True)
+
+    teacher_id = Column(
+        Integer,
+        ForeignKey("teachers.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    created_date = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_date = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    deleted_date = Column(DateTime(timezone=True), nullable=True)
+
+    teacher = relationship("Teacher", back_populates="classrooms")
+    members = relationship(
+        "ClassroomMember",
+        back_populates="classroom",
+        cascade="all, delete-orphan",
+    )
+    learning_outcomes = relationship(
+        "LearningOutcome",
+        back_populates="classroom",
+        cascade="all, delete-orphan",
+    )
+
+class ClassroomMember(Base):
+    __tablename__ = "classroom_members"
+
+    id = Column(Integer, primary_key=True, index=True)
+    classroom_id = Column(
+        Integer,
+        ForeignKey("classrooms.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    student_id = Column(
+        Integer,
+        ForeignKey("students.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    created_date = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_date = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    deleted_date = Column(DateTime(timezone=True), nullable=True)
+
+    classroom = relationship("Classroom", back_populates="members")
+    student = relationship("Student", back_populates="classrooms")
+
+    __table_args__ = (
+        UniqueConstraint("classroom_id", "student_id", name="uq_classroom_student"),
+    )
+
+class LearningOutcome(Base):
+    __tablename__ = "learning_outcomes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    classroom_id = Column(
+        Integer,
+        ForeignKey("classrooms.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    description = Column(String, nullable=True)
+
+    created_date = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_date = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    deleted_date = Column(DateTime(timezone=True), nullable=True)
+
+    classroom = relationship("Classroom", back_populates="learning_outcomes")
