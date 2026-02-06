@@ -38,3 +38,17 @@ class ClassroomResponse(BaseModel):
 class ClassroomListResponse(BaseModel):
     classrooms: list[ClassroomResponse]
     total: int
+
+
+class JoinClassroomRequest(BaseModel):
+    code: str
+
+
+class JoinClassroomResponse(BaseModel):
+    message: str
+    classroom_id: int
+    classroom_name: str
+    joined_at: datetime
+    
+    class Config:
+        from_attributes = True

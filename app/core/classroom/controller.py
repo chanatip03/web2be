@@ -1,20 +1,25 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.db.database import get_db
-from app.models.schema import User
 from typing import List
+import csv
+import io
 from .dto import (
     CreateClassroomRequest,
     CreateClassroomResponse,
     ClassroomResponse,
-    ClassroomListResponse
+    ClassroomListResponse,
+    JoinClassroomRequest,
+    JoinClassroomResponse
 )
 from .service import (
     create_new_classroom,
     get_teacher_classrooms,
-    get_classroom_details
+    get_classroom_details,
+    get_classroom_students_for_export,
+    join_classroom_by_code
 )
-# from app.auth.dependencies import get_current_user
 
 router = APIRouter(prefix="/classroom", tags=["Classroom"])
 
@@ -23,25 +28,10 @@ router = APIRouter(prefix="/classroom", tags=["Classroom"])
 def create_classroom_endpoint(
     data: CreateClassroomRequest,
     db: Session = Depends(get_db),
-    # current_user: User = Depends(get_current_user)  # TODO: เพิ่ม auth
 ):
-    """
-    สร้าง classroom ใหม่ (เฉพาะครูเท่านั้น)
-    
-    Args:
-        - name: ชื่อ classroom
-        - semester: ภาคเรียน (เช่น "1/2025", "2/2025")
-        - description: คำอธิบาย (optional)
-    
-    Returns:
-        - id: ID ของ classroom
-        - name: ชื่อ classroom
-        - code: รหัสสำหรับเข้าร่วม classroom (8 ตัวอักษร)
-        - semester: ภาคเรียน
-        - teacher_id: ID ของครู
-    """
+    """สร้าง classroom ใหม่ (เฉพาะครู)"""
     # TODO: ใช้ current_user.id แทน user_id_mock
-    user_id_mock = 1  # สมมติว่า user_id = 1 เป็นครู (ต้องเปลี่ยนเป็น current_user.id)
+    user_id_mock = 1
     
     try:
         classroom = create_new_classroom(
@@ -71,20 +61,42 @@ def create_classroom_endpoint(
         )
 
 
+@router.post("/join", response_model=JoinClassroomResponse)
+def join_classroom_endpoint(
+    data: JoinClassroomRequest,
+    db: Session = Depends(get_db),
+):
+    """นักเรียนเข้าร่วม classroom ด้วย code 6 ตัวอักษร"""
+    # TODO: ใช้ current_user.id แทน user_id_mock
+    user_id_mock = 2  # สมมติ user_id = 2 เป็นนักเรียน
+    
+    try:
+        result = join_classroom_by_code(
+            db=db,
+            user_id=user_id_mock,
+            code=data.code.upper()
+        )
+        
+        return JoinClassroomResponse(**result)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to join classroom: {str(e)}"
+        )
+
+
 @router.get("/", response_model=ClassroomListResponse)
 def get_classrooms_endpoint(
     db: Session = Depends(get_db),
-    # current_user: User = Depends(get_current_user)  # TODO: เพิ่ม auth
 ):
-    """
-    ดึง classroom ทั้งหมดของครู
-    
-    Returns:
-        - classrooms: รายการ classroom ทั้งหมดที่ครูสอน
-        - total: จำนวน classroom ทั้งหมด
-    """
+    """ดึง classroom ทั้งหมดของครู"""
     # TODO: ใช้ current_user.id แทน user_id_mock
-    user_id_mock = 1  # สมมติ user_id (ต้องเปลี่ยนเป็น current_user.id)
+    user_id_mock = 1
     
     try:
         classrooms = get_teacher_classrooms(db, user_id_mock)
@@ -110,15 +122,10 @@ def get_classrooms_endpoint(
 def get_classroom_endpoint(
     classroom_id: int,
     db: Session = Depends(get_db),
-    # current_user: User = Depends(get_current_user)  # TODO: เพิ่ม auth
 ):
-    """
-    ดึงรายละเอียด classroom
-    
-    ต้องเป็นครูของ classroom นี้เท่านั้น
-    """
+    """ดึงรายละเอียด classroom"""
     # TODO: ใช้ current_user.id แทน user_id_mock
-    user_id_mock = 1  # สมมติ user_id (ต้องเปลี่ยนเป็น current_user.id)
+    user_id_mock = 1
     
     details = get_classroom_details(db, classroom_id, user_id_mock)
     
@@ -129,3 +136,46 @@ def get_classroom_endpoint(
         )
     
     return ClassroomResponse(**details)
+
+
+@router.get("/{classroom_id}/students/export")
+def export_classroom_students(
+    classroom_id: int,
+    db: Session = Depends(get_db),
+):
+    """ดาวน์โหลดรายชื่อนักเรียนใน classroom เป็น CSV"""
+    # TODO: ใช้ current_user.id แทน user_id_mock
+    user_id_mock = 1
+    
+    students = get_classroom_students_for_export(db, classroom_id, user_id_mock)
+    
+    if students is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Classroom not found or access denied"
+        )
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    writer.writerow(["Student ID", "First Name", "Last Name", "Email", "Academy", "Joined Date"])
+    
+    for student in students:
+        writer.writerow([
+            student["student_id"] or "",
+            student["first_name"],
+            student["last_name"],
+            student["email"],
+            student["academy"] or "",
+            student["joined_date"].strftime("%Y-%m-%d %H:%M:%S") if student["joined_date"] else ""
+        ])
+    
+    output.seek(0)
+    
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=classroom_{classroom_id}_students.csv"
+        }
+    )
