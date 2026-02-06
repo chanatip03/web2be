@@ -9,15 +9,6 @@ from app.models.schema import Teacher
 router = APIRouter(prefix="/classroom", tags=["Classroom"])
 
 
-@router.get("/{classroom_id}/syllabus", response_model=SyllabusResponseDTO)
-def get_syllabus_endpoint(classroom_id: int, db: Session = Depends(get_db), teacher: Teacher = Depends(get_current_teacher)):
-    data = get_syllabus_data(db, classroom_id, teacher.user_id)
-
-    if not data:
-        raise HTTPException(status_code=404, detail="Classroom not found or access denied")
-
-    return SyllabusResponseDTO(**data)
-
 @router.get("/{classroom_id}/students", response_model=ClassroomStudentsResponseDTO)
 def get_students_endpoint(
     classroom_id: int,
@@ -31,17 +22,3 @@ def get_students_endpoint(
         raise HTTPException(status_code=404, detail="Classroom not found or access denied")
 
     return ClassroomStudentsResponseDTO(**data)
-
-@router.put("/{classroom_id}")
-def update_classroom_endpoint(
-    classroom_id: int,
-    payload: ClassroomUpdateDTO,
-    db: Session = Depends(get_db),
-    teacher: Teacher = Depends(get_current_teacher),
-):
-    success = update_classroom_data(db, classroom_id, teacher.user_id, payload)
-
-    if not success:
-        raise HTTPException(status_code=404, detail="Classroom not found or access denied")
-
-    return {"message": "Classroom updated successfully"}
