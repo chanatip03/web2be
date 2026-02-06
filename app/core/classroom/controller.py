@@ -18,19 +18,6 @@ def get_syllabus_endpoint(classroom_id: int, db: Session = Depends(get_db), teac
 
     return SyllabusResponseDTO(**data)
 
-@router.get("/{classroom_id}/students", response_model=ClassroomStudentsResponseDTO)
-def get_students_endpoint(
-    classroom_id: int,
-    search: str | None = Query(default=None),
-    db: Session = Depends(get_db),
-    teacher: Teacher = Depends(get_current_teacher),
-):
-    data = get_classroom_students(db, classroom_id, teacher.user_id, search)
-
-    if not data:
-        raise HTTPException(status_code=404, detail="Classroom not found or access denied")
-
-    return ClassroomStudentsResponseDTO(**data)
 
 @router.put("/{classroom_id}")
 def update_classroom_endpoint(
