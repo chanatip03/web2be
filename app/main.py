@@ -4,15 +4,24 @@ from fastapi import UploadFile, File, Form
 from app.utils.r2 import upload_file, get_file_bytes
 from app.utils.archive import unzip_file, delete_directory
 from fastapi.responses import JSONResponse
-import uuid
 import os
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="WEB2 API")
 
-app.include_router(api_router, prefix="/api")
-# app.include_router(security_router, prefix="/security")
+origins = [
+    "http://localhost:3000",
+]
 
-student_counter = 1
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(api_router, prefix="/api")
 
 @app.get("/")
 def health():
@@ -68,8 +77,8 @@ def delete_test():
     try:
         success = delete_directory()
         if success:
-            return JSONResponse({"message": f"Folder deleted successfully"})
+            return JSONResponse({"message": "Folder deleted successfully"})
         else:
-            return JSONResponse({"error": f"Folder not found"}, status_code=404)
+            return JSONResponse({"error": "Folder not found"}, status_code=404)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
