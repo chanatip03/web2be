@@ -6,5 +6,5 @@ class Token(BaseModel):
     token_type: str = "bearer"
 
 class LoginRequest(BaseModel):
-    email: str
+    email: EmailStr
     password: str
