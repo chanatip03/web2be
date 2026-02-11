@@ -1,5 +1,6 @@
+from typing import Optional
 from sqlalchemy.orm import Session
-from app.models.schema import User, Student, Role, role_users, RoleEnum
+from app.models.schema import User, Student
 
 
 def create_user(db: Session, first_name: str, last_name: str, email: str, password: str, academy: str | None = None):
@@ -26,3 +27,10 @@ def create_student_profile(db: Session, user: User, student_id: str | None = Non
     db.commit()
     db.refresh(student)
     return student
+
+def get_student_by_user_id(db: Session, user_id: int) -> Optional[Student]:
+    """ดึงข้อมูล student จาก user_id"""
+    return db.query(Student).filter(
+        Student.user_id == user_id,
+        Student.deleted_date.is_(None)
+    ).first()

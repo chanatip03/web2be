@@ -21,15 +21,6 @@ def create_access_token(data: dict):
     expire = datetime.now(timezone.utc) + timedelta(minutes=expire_minutes)
 
     payload = dict(data)
-    if "userId" not in payload:
-        if "sub" in payload:
-            payload["userId"] = payload.get("sub")
-        elif "id" in payload:
-            payload["userId"] = payload.get("id")
-
-    if "role" not in payload:
-        if "type" in payload:
-            payload["role"] = payload.get("type")
 
     exp_ts = int(expire.timestamp())
     payload["exp"] = exp_ts

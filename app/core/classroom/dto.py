@@ -2,23 +2,15 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 
+from app.core.student.dto import StudentResponse
+from app.core.teacher.dto import TeacherResponse
+
 
 class CreateClassroomRequest(BaseModel):
     name: str
     semester: str
     description: Optional[str] = None
-
-
-class CreateClassroomResponse(BaseModel):
-    id: int
-    name: str
-    code: str
-    semester: str
-    teacher_id: int
-    
-    class Config:
-        from_attributes = True
-
+    learning_out_come: Optional[str] = None
 
 class ClassroomResponse(BaseModel):
     id: int
@@ -26,29 +18,16 @@ class ClassroomResponse(BaseModel):
     code: str
     semester: str
     description: Optional[str] = None
-    teacher_id: int
-    teacher_name: str
-    student_count: int
-    created_at: datetime
-    
+    learning_out_come: Optional[str] = None
+    excel_link: str
+    teacher: TeacherResponse
     class Config:
         from_attributes = True
 
-
-class ClassroomListResponse(BaseModel):
-    classrooms: list[ClassroomResponse]
-    total: int
-
-
-class JoinClassroomRequest(BaseModel):
-    code: str
-
-
-class JoinClassroomResponse(BaseModel):
-    message: str
+class ClassroomMemberResponse(BaseModel):
+    id: int
+    student: StudentResponse
     classroom_id: int
-    classroom_name: str
-    joined_at: datetime
-    
+    joined_date: datetime
     class Config:
         from_attributes = True
