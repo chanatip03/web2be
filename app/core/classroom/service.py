@@ -1,10 +1,10 @@
 import csv
 import io
 from sqlalchemy.orm import Session
-from app.core.classroom.dto import ClassroomResponse, ClassroomUpdateDTO, CreateClassroomRequest , ClassroomMemberResponse
+from app.core.classroom.dto import ClassroomUpdateDTO, CreateClassroomRequest
 from app.core.student.repository import get_student_by_user_id
 from app.core.teacher.repository import get_teacher_by_user_id
-from app.models.schema import Classroom, ClassroomMember
+from app.models.schema import Classroom
 from app.utils.r2 import upload_file
 from .repository import (
     create_classroom,
@@ -12,8 +12,6 @@ from .repository import (
     get_classrooms_by_student_id,
     get_classrooms_by_teacher_id,
     is_classroom_of_teacher,
-    is_student_in_classroom,
-    add_student_to_classroom,
     update_classroom,
 )
 import random
@@ -83,30 +81,6 @@ def get_classrooms_service(db: Session, current_user):
         return []
 
     return classrooms
-
-def join_classroom_by_code(db: Session, user_id: int, classroom_id: int, code: str):
-
-    student = get_student_by_user_id(db, user_id)
-    if not student:
-        raise ValueError("User is not a student")
-    if is_student_in_classroom(db, classroom_id, student.id):
-        raise ValueError("Already joined this classroom")
-
-    classroom = get_classroom_by_id(db, classroom_id)
-    if not classroom:
-        raise ValueError("Classroom not found")
-
-    if classroom.code != code:
-        raise ValueError("Incorrect classroom code")
-    
-    member = ClassroomMember(
-        classroom_id=classroom_id,
-        student_id=student.id
-    )
-
-    add_student_to_classroom(db, member)
-
-    return member
 
 def get_classroom_by_id_service(db: Session, classroom_id: int):
 

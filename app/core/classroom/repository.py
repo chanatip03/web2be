@@ -65,15 +65,6 @@ def get_classroom_members(db: Session, classroom_id: int) -> ClassroomMember:
         .all()
     )
 
-def is_student_in_classroom(db: Session, classroom_id: int, student_id: int) -> bool:
-    """เช็คว่านักเรียนอยู่ใน classroom แล้วหรือยัง"""
-    return ( db.query(ClassroomMember).filter(
-        ClassroomMember.classroom_id == classroom_id,
-        ClassroomMember.student_id == student_id,
-        ClassroomMember.deleted_date.is_(None)
-    ).first()
-    )
-
 def is_classroom_of_teacher(db: Session, classroom_id: int, teacher_id: int) -> bool:
 
     return ( db.query(Classroom).filter(
@@ -82,12 +73,6 @@ def is_classroom_of_teacher(db: Session, classroom_id: int, teacher_id: int) -> 
         Classroom.deleted_date.is_(None)
     ).first()
     )
-
-def add_student_to_classroom(db: Session, member: ClassroomMember) -> ClassroomMember:
-    db.add(member)
-    db.commit()
-    db.refresh(member)
-    return member
 
 def update_classroom(db: Session, classroom: Classroom, update_data: dict) -> Classroom:
     for key, value in update_data.items():
