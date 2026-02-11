@@ -4,7 +4,7 @@ from jose import JWTError
 
 from app.db.database import get_db
 from app.utils.generate_token import decode_token
-from app.models.schema import User, Admin, Teacher
+from app.models.schema import User, Admin
 
 
 def get_current_user(

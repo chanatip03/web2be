@@ -1,41 +1,11 @@
 from pydantic import BaseModel
 from typing import List, Optional
-
-
-class LearningOutcomeDTO(BaseModel):
-    id: int
-    description: Optional[str]
-
-    class Config:
-        from_attributes = True
-
-
-class SyllabusResponseDTO(BaseModel):
-    classroom_name: str
-    teacher_name: str
-    classroom_description: Optional[str]
-    learning_outcomes: List[LearningOutcomeDTO]
-
-    class Config:
-        from_attributes = True
-
-
-
-class LearningOutcomeUpdateDTO(BaseModel):
-    id: Optional[int]
-    description: str
-
-
-class ClassroomUpdateDTO(BaseModel):
-    name: Optional[str]
-    description: Optional[str]
-    learning_outcomes: Optional[List[LearningOutcomeUpdateDTO]]
+from datetime import datetime
 from typing import Optional
 from datetime import datetime
 
 from app.core.student.dto import StudentResponse
 from app.core.teacher.dto import TeacherResponse
-
 
 class CreateClassroomRequest(BaseModel):
     name: str
@@ -62,3 +32,10 @@ class ClassroomMemberResponse(BaseModel):
     joined_date: datetime
     class Config:
         from_attributes = True
+
+class ClassroomUpdateDTO(BaseModel):
+    name: Optional[str]
+    semester: Optional[str]
+    description: Optional[str]
+    learning_outcomes: Optional[str] = None
+
