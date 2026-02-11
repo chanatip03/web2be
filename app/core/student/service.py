@@ -1,18 +1,25 @@
 from sqlalchemy.orm import Session
 from app.utils.generate_token import hash_password
-from app.models.schema import RoleEnum
+from app.models.schema import RoleEnum, User
 from app.utils.role import get_role_by_name, add_role_to_user
-from app.core.student.repository import create_user, create_student_profile
+from app.core.student.repository import create_student_profile
+from app.utils.user import create_user
 
 def create_student(db: Session, first_name: str, last_name: str, email: str, password: str, academy: str | None = None, student_id: str | None = None):
-    # hash password
     hashed = hash_password(password)
-    user = create_user(db, first_name, last_name, email, hashed, academy)
+    user = User(
+        first_name, 
+        last_name, 
+        email, 
+        hashed, 
+        academy
+        )
+    
+    if not create_user(db, user):
+        raise TypeError("Create user failed")
 
-    # ensure role exists
     role = get_role_by_name(db, RoleEnum.student)
     if not role:
-        # create role lazily
         from app.models.schema import Role
         role = Role(name=RoleEnum.student)
         db.add(role)

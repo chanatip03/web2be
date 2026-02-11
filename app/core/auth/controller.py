@@ -166,7 +166,7 @@ def verify_otp(email: str, otp: str, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/check-user-token")
+@router.post("/me")
 async def check_user_token(request: Request):
     token = request.cookies.get("access_token")
     if not token:

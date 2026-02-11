@@ -20,10 +20,9 @@ class UserResponse(BaseModel):
 
 class StudentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
     id: int
     student_id: str
-    discord_id: str | None
+    discord_user_id: str | None
     user: UserResponse
 
 class CreateStudentResponse(BaseModel):
