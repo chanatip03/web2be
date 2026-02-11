@@ -17,7 +17,6 @@ async def register_teacher(
     email: str = Form(...),
     password: str = Form(...),
     academy: str = Form(...),
-    part: str = Form(...),
     certificate: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
