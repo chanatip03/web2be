@@ -16,7 +16,9 @@ except Exception:
 
 R2_ACCESS_KEY = os.getenv("R2_ACCESS_KEY")
 R2_SECRET_KEY = os.getenv("R2_SECRET_KEY")
-R2_URL = os.getenv("R2_URL")
+R2_ENDPOINT = os.getenv("R2_ENDPOINT")   # ใช้สำหรับ boto3
+R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL")  # ใช้สร้างลิงก์
+R2_BUCKET = os.getenv("R2_BUCKET")
 R2_BUCKET = os.getenv("R2_BUCKET")
 
 
@@ -24,12 +26,12 @@ def _get_s3_client():
     if boto3 is None:
         raise RuntimeError("boto3 is required for r2 operations. Install boto3 in your environment.")
 
-    if not (R2_ACCESS_KEY and R2_SECRET_KEY and R2_URL and R2_BUCKET):
-        raise RuntimeError("R2 credentials (R2_ACCESS_KEY, R2_SECRET_KEY, R2_URL, R2_BUCKET) are not all set in environment")
+    if not (R2_ACCESS_KEY and R2_SECRET_KEY and R2_ENDPOINT and R2_BUCKET):
+        raise RuntimeError("R2 credentials (R2_ACCESS_KEY, R2_SECRET_KEY, R2_ENDPOINT, R2_BUCKET) are not all set in environment")
 
     return boto3.client(
         "s3",
-        endpoint_url=R2_URL,
+        endpoint_url=R2_ENDPOINT,
         aws_access_key_id=R2_ACCESS_KEY,
         aws_secret_access_key=R2_SECRET_KEY,
     )
@@ -37,19 +39,22 @@ def _get_s3_client():
 
 def upload_file(key: str, data: bytes, content_type: Optional[str] = None) -> Tuple[str, str]:
     client = _get_s3_client()
-
     key = key.lstrip('/')
 
     extra_args = {}
     if content_type:
         extra_args["ContentType"] = content_type
 
-    try:
-        client.put_object(Bucket=R2_BUCKET, Key=key, Body=data, **extra_args)
-    except (BotoCoreError, ClientError) as e:
-        raise RuntimeError(f"R2 upload failed: {e}")
+    client.put_object(
+        Bucket=R2_BUCKET,
+        Key=key,
+        Body=data,
+        **extra_args
+    )
 
-    url = f"{R2_URL.rstrip('/')}/{R2_BUCKET}/{key}"
+    # สร้าง public url
+    url = f"{R2_PUBLIC_URL.rstrip('/')}/{key}"
+
     return key, url
 
 
