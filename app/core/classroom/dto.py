@@ -1,10 +1,11 @@
 from pydantic import BaseModel
+from typing import List, Optional
+from datetime import datetime
 from typing import Optional
 from datetime import datetime
 
 from app.core.student.dto import StudentResponse
 from app.core.teacher.dto import TeacherResponse
-
 
 class CreateClassroomRequest(BaseModel):
     name: str
@@ -31,3 +32,10 @@ class ClassroomMemberResponse(BaseModel):
     joined_date: datetime
     class Config:
         from_attributes = True
+
+class ClassroomUpdateDTO(BaseModel):
+    name: Optional[str]
+    semester: Optional[str]
+    description: Optional[str]
+    learning_outcomes: Optional[str] = None
+

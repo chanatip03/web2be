@@ -74,9 +74,27 @@ def is_student_in_classroom(db: Session, classroom_id: int, student_id: int) -> 
     ).first()
     )
 
+def is_classroom_of_teacher(db: Session, classroom_id: int, teacher_id: int) -> bool:
+
+    return ( db.query(Classroom).filter(
+        Classroom.id == classroom_id,
+        Classroom.teacher_id == teacher_id,
+        Classroom.deleted_date.is_(None)
+    ).first()
+    )
 
 def add_student_to_classroom(db: Session, member: ClassroomMember) -> ClassroomMember:
     db.add(member)
     db.commit()
     db.refresh(member)
     return member
+
+def update_classroom(db: Session, classroom: Classroom, update_data: dict) -> Classroom:
+    for key, value in update_data.items():
+        if value is not None:
+            setattr(classroom, key, value)
+
+    db.commit()
+    db.refresh(classroom)
+    return classroom
+
