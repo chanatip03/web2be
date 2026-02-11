@@ -21,7 +21,6 @@ from app.core.teacher.service import create_teacher
 
 router = APIRouter(prefix="/auth" , tags=["auth"])
 
-
 def _set_token_cookie(response: Response, token: str):
     response.set_cookie(
         key="access_token",
