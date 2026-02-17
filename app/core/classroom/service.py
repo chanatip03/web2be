@@ -5,7 +5,6 @@ from app.core.classroom.dto import ClassroomUpdateDTO, CreateClassroomRequest
 from app.core.student.repository import get_student_by_user_id
 from app.core.teacher.repository import get_teacher_by_user_id
 from app.models.schema import Classroom
-from app.utils.r2 import upload_file
 from .repository import (
     create_classroom,
     get_classroom_by_id,
@@ -32,30 +31,13 @@ def create_new_classroom(data: CreateClassroomRequest, db: Session, current_user
     
     code = generate_classroom_code()
 
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["student_id", "name"])
-
-    csv_bytes = output.getvalue().encode("utf-8")
-
-    safe_semester = data.semester.replace("/", "-")
-    filename = f"{data.name}_{safe_semester}_scores.csv"
-    key = f"classrooms/{filename}"
-
-    _, url = upload_file(
-        key,
-        csv_bytes,
-        "text/csv"
-    )
-
     classroom = Classroom(
         name=data.name,
         semester=data.semester,
         teacher_id=teacher.id,
         description=data.description,
-        learning_out_come=data.learning_out_come,
+        learningoutcomes=data.learningoutcomes,
         code=code,
-        excel_link=url
     )
 
     create_classroom(db, classroom)
@@ -106,7 +88,7 @@ def update_classroom_service(db: Session, classroom_id: int,current_user, payloa
         "name": payload.name,
         "semester": payload.semester,
         "description": payload.description,
-        "learning_out_come": payload.learning_outcomes
+        "learningoutcomes": payload.learning_outcomes
     }
 
     updated_classroom = update_classroom(db, classroom, update_data)

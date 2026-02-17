@@ -8,7 +8,7 @@ class CreateClassroomRequest(BaseModel):
     name: str
     semester: str
     description: Optional[str] = None
-    learning_out_come: Optional[str] = None
+    learningoutcomes: Optional[str] = None
 
 class ClassroomResponse(BaseModel):
     id: int
@@ -16,8 +16,7 @@ class ClassroomResponse(BaseModel):
     code: str
     semester: str
     description: Optional[str] = None
-    learning_out_come: Optional[str] = None
-    excel_link: str
+    learningoutcomes: Optional[str] = None
     teacher: TeacherResponse
     class Config:
         from_attributes = True
@@ -26,5 +25,5 @@ class ClassroomUpdateDTO(BaseModel):
     name: Optional[str]
     semester: Optional[str]
     description: Optional[str]
-    learning_outcomes: Optional[str] = None
+    learningoutcomes: Optional[str] = None
 
