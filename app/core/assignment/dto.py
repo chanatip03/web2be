@@ -42,3 +42,20 @@ class CreateAssignmentResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class AssignmentListResponse(BaseModel):
+    id: int
+    name: str
+    detail: Optional[str] = None
+    startDate: datetime
+    dueDate: datetime
+    isGroup: bool
+    isPublic: bool
+    projectType: ProjectTypeResponse
+    language: LanguageResponse
+    testcaseUrl: Optional[str] = None
+    attachments: List[AttachmentResponse]
+
+    class Config:
+        from_attributes = True

@@ -1,14 +1,7 @@
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from sqlalchemy.orm import Session
-from app.models.schema import Assignment, Attachment, Classroom, ProjectType, Language, Teacher
-
-
-def get_teacher_by_user_id(db: Session, user_id: int) -> Optional[Teacher]:
-    return db.query(Teacher).filter(
-        Teacher.user_id == user_id,
-        Teacher.deleted_date.is_(None)
-    ).first()
+from app.models.schema import Assignment, Attachment, Classroom, ProjectType, Language
 
 
 def get_classroom_by_id(db: Session, classroom_id: int) -> Optional[Classroom]:
@@ -24,6 +17,14 @@ def get_project_type_by_id(db: Session, project_type_id: int) -> Optional[Projec
 
 def get_language_by_id(db: Session, language_id: int) -> Optional[Language]:
     return db.query(Language).filter(Language.id == language_id).first()
+
+
+def get_all_project_types(db: Session) -> list:
+    return db.query(ProjectType).all()
+
+
+def get_all_languages(db: Session) -> list:
+    return db.query(Language).all()
 
 
 def create_assignment(
@@ -66,3 +67,32 @@ def create_attachment(db: Session, assignment_id: int, file_url: str) -> Attachm
     db.commit()
     db.refresh(attachment)
     return attachment
+
+
+def get_assignments_by_classroom(db: Session, classroom_id: int) -> List[Assignment]:
+    return db.query(Assignment).filter(
+        Assignment.classroom_id == classroom_id,
+        Assignment.deleted_date.is_(None)
+    ).all()
+
+
+def get_assignment_by_id(db: Session, assignment_id: int) -> Optional[Assignment]:
+    return db.query(Assignment).filter(
+        Assignment.id == assignment_id,
+        Assignment.deleted_date.is_(None)
+    ).first()
+
+
+def update_assignment(db: Session, assignment: Assignment, update_data: dict) -> Assignment:
+    for key, value in update_data.items():
+        if value is not None:
+            setattr(assignment, key, value)
+    db.commit()
+    db.refresh(assignment)
+    return assignment
+
+
+def soft_delete_assignment(db: Session, assignment: Assignment) -> None:
+    from datetime import timezone
+    assignment.deleted_date = datetime.now(timezone.utc)
+    db.commit()

@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: admin
       POSTGRES_DB: web2
     ports:
-      - "5432:5432"
+      - "5435:5432"
     volumes:
       - ./databasepg:/var/lib/postgresql/data
     healthcheck:
