@@ -8,11 +8,11 @@ from app.utils.user import create_user
 def create_student(db: Session, first_name: str, last_name: str, email: str, password: str, academy: str | None = None, student_id: str | None = None):
     hashed = hash_password(password)
     user = User(
-        first_name, 
-        last_name, 
-        email, 
-        hashed, 
-        academy
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            password=hashed,
+            academy=academy
         )
     
     if not create_user(db, user):

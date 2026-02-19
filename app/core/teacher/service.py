@@ -8,11 +8,11 @@ from .repository import create_teacher_profile
 def create_teacher(db: Session, first_name: str, last_name: str, email: str, password: str, academy: str, certificate_url: str ):
     hashed = hash_password(password)
     user = User(
-        first_name, 
-        last_name, 
-        email, 
-        hashed, 
-        academy
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            password=hashed,
+            academy=academy
         )
     
     if not create_user(db, user):
