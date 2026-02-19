@@ -59,3 +59,41 @@ class AssignmentListResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class AssignmentDetailResponse(BaseModel):
+    id: int
+    name: str
+    detail: Optional[str] = None
+    startDate: datetime
+    dueDate: datetime
+    isGroup: bool
+    isPublic: bool
+    projectType: ProjectTypeResponse
+    language: LanguageResponse
+    testcaseUrl: Optional[str] = None
+    attachments: List[AttachmentResponse]
+
+    class Config:
+        from_attributes = True
+
+
+class UpdateAssignmentResponse(BaseModel):
+    id: int
+    name: str
+    detail: Optional[str] = None
+    startDate: datetime
+    dueDate: datetime
+    isGroup: bool
+    isPublic: bool
+    projectType: ProjectTypeResponse
+    language: LanguageResponse
+    testcaseUrl: Optional[str] = None
+    attachments: List[AttachmentResponse]
+
+    class Config:
+        from_attributes = True
+
+
+class DeleteAssignmentResponse(BaseModel):
+    message: str

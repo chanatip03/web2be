@@ -8,8 +8,21 @@ from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.utils.r2 import upload_file
 from app.utils.validator import get_current_user
-from .dto import CreateAssignmentResponse, AssignmentListResponse, AttachmentResponse
-from .service import create_assignment_service, get_assignments_service
+from .dto import (
+    CreateAssignmentResponse,
+    AssignmentListResponse,
+    AssignmentDetailResponse,
+    UpdateAssignmentResponse,
+    DeleteAssignmentResponse,
+    AttachmentResponse,
+)
+from .service import (
+    create_assignment_service,
+    get_assignments_service,
+    get_assignment_by_id_service,
+    update_assignment_service,
+    delete_assignment_service,
+)
 
 router = APIRouter(prefix="/assignment", tags=["Assignment"])
 
@@ -113,5 +126,110 @@ def get_assignments(
             )
             for a in assignments
         ]
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get("/{assignment_id}", response_model=AssignmentDetailResponse)
+def get_assignment_by_id(
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        assignment = get_assignment_by_id_service(db, current_user["id"], assignment_id)
+        return AssignmentDetailResponse(
+            id=assignment.id,
+            name=assignment.title,
+            detail=assignment.description,
+            startDate=assignment.start_date,
+            dueDate=assignment.due_date,
+            isGroup=assignment.is_group,
+            isPublic=assignment.is_public,
+            projectType=assignment.project_type,
+            language=assignment.language,
+            testcaseUrl=assignment.testcase_url,
+            attachments=[
+                AttachmentResponse(id=a.id, fileUrl=a.file_url)
+                for a in assignment.attachments
+            ],
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.put("/{assignment_id}", response_model=UpdateAssignmentResponse)
+async def update_assignment(
+    assignment_id: int,
+    name: Optional[str] = Form(None),
+    detail: Optional[str] = Form(None),
+    startDate: Optional[datetime] = Form(None),
+    dueDate: Optional[datetime] = Form(None),
+    isGroup: Optional[bool] = Form(None),
+    isPublic: Optional[bool] = Form(None),
+    projecttypeId: Optional[int] = Form(None),
+    languageId: Optional[int] = Form(None),
+    testcase: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        testcase_url: Optional[str] = None
+        if testcase and testcase.filename:
+            content = await testcase.read()
+            ext = testcase.filename.split(".")[-1] if "." in testcase.filename else "bin"
+            key = f"testcases/{uuid.uuid4()}.{ext}"
+            _, testcase_url = upload_file(key, content, content_type=testcase.content_type)
+
+        assignment = update_assignment_service(
+            db=db,
+            user_id=current_user["id"],
+            assignment_id=assignment_id,
+            title=name,
+            description=detail,
+            start_date=startDate,
+            due_date=dueDate,
+            is_group=isGroup,
+            is_public=isPublic,
+            project_type_id=projecttypeId,
+            language_id=languageId,
+            testcase_url=testcase_url,
+        )
+
+        return UpdateAssignmentResponse(
+            id=assignment.id,
+            name=assignment.title,
+            detail=assignment.description,
+            startDate=assignment.start_date,
+            dueDate=assignment.due_date,
+            isGroup=assignment.is_group,
+            isPublic=assignment.is_public,
+            projectType=assignment.project_type,
+            language=assignment.language,
+            testcaseUrl=assignment.testcase_url,
+            attachments=[
+                AttachmentResponse(id=a.id, fileUrl=a.file_url)
+                for a in assignment.attachments
+            ],
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.delete("/{assignment_id}", response_model=DeleteAssignmentResponse)
+def delete_assignment(
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        delete_assignment_service(db, current_user["id"], assignment_id)
+        return DeleteAssignmentResponse(message="Assignment deleted successfully")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
