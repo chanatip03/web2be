@@ -11,10 +11,9 @@ from sqlalchemy import (
     UniqueConstraint,
     JSON
 )
-from sqlalchemy.orm import relationship, declarative_base
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-
-Base = declarative_base()
+from app.db.database import Base
 
 class RoleEnum(enum.Enum):
     student = "student"

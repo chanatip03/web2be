@@ -27,58 +27,32 @@ class AttachmentResponse(BaseModel):
         from_attributes = True
 
 
-class CreateAssignmentResponse(BaseModel):
-    id: int
-    name: str
+# Request — รับจาก form
+class CreateAssignmentRequest(BaseModel):
+    name: Optional[str] = None
     detail: Optional[str] = None
-    startDate: datetime
-    dueDate: datetime
-    isGroup: bool
-    isPublic: bool
-    projectType: ProjectTypeResponse
-    language: LanguageResponse
-    testcaseUrl: Optional[str] = None
-    attachments: List[AttachmentResponse]
-
-    class Config:
-        from_attributes = True
+    startDate: Optional[datetime] = None
+    dueDate: Optional[datetime] = None
+    isGroup: bool = False
+    isPublic: bool = False
+    projecttypeId: Optional[int] = None
+    languageId: Optional[int] = None
+    classroomId: Optional[int] = None
 
 
-class AssignmentListResponse(BaseModel):
-    id: int
-    name: str
+class UpdateAssignmentRequest(BaseModel):
+    name: Optional[str] = None
     detail: Optional[str] = None
-    startDate: datetime
-    dueDate: datetime
-    isGroup: bool
-    isPublic: bool
-    projectType: ProjectTypeResponse
-    language: LanguageResponse
-    testcaseUrl: Optional[str] = None
-    attachments: List[AttachmentResponse]
-
-    class Config:
-        from_attributes = True
+    startDate: Optional[datetime] = None
+    dueDate: Optional[datetime] = None
+    isGroup: Optional[bool] = None
+    isPublic: Optional[bool] = None
+    projecttypeId: Optional[int] = None
+    languageId: Optional[int] = None
 
 
-class AssignmentDetailResponse(BaseModel):
-    id: int
-    name: str
-    detail: Optional[str] = None
-    startDate: datetime
-    dueDate: datetime
-    isGroup: bool
-    isPublic: bool
-    projectType: ProjectTypeResponse
-    language: LanguageResponse
-    testcaseUrl: Optional[str] = None
-    attachments: List[AttachmentResponse]
-
-    class Config:
-        from_attributes = True
-
-
-class UpdateAssignmentResponse(BaseModel):
+# Response — ใช้ตัวเดียวกันทุก endpoint
+class AssignmentResponse(BaseModel):
     id: int
     name: str
     detail: Optional[str] = None

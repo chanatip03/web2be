@@ -9,12 +9,11 @@ from app.db.database import get_db
 from app.utils.r2 import upload_file
 from app.utils.validator import get_current_user
 from .dto import (
-    CreateAssignmentResponse,
-    AssignmentListResponse,
-    AssignmentDetailResponse,
-    UpdateAssignmentResponse,
-    DeleteAssignmentResponse,
+    CreateAssignmentRequest,
+    UpdateAssignmentRequest,
+    AssignmentResponse,
     AttachmentResponse,
+    DeleteAssignmentResponse,
 )
 from .service import (
     create_assignment_service,
@@ -27,7 +26,49 @@ from .service import (
 router = APIRouter(prefix="/assignment", tags=["Assignment"])
 
 
-@router.post("/", response_model=CreateAssignmentResponse)
+def _build_response(assignment) -> AssignmentResponse:
+    return AssignmentResponse(
+        id=assignment.id,
+        name=assignment.title,
+        detail=assignment.description,
+        startDate=assignment.start_date,
+        dueDate=assignment.due_date,
+        isGroup=assignment.is_group,
+        isPublic=assignment.is_public,
+        projectType=assignment.project_type,
+        language=assignment.language,
+        testcaseUrl=assignment.testcase_url,
+        attachments=[
+            AttachmentResponse(id=a.id, fileUrl=a.file_url)
+            for a in assignment.attachments
+        ],
+    )
+
+
+async def _upload_testcase(testcase: Optional[UploadFile]) -> Optional[str]:
+    if testcase and testcase.filename:
+        content = await testcase.read()
+        ext = testcase.filename.split(".")[-1] if "." in testcase.filename else "bin"
+        key = f"testcases/{uuid.uuid4()}.{ext}"
+        _, url = upload_file(key, content, content_type=testcase.content_type)
+        return url
+    return None
+
+
+async def _upload_attachments(attachment: Optional[List[UploadFile]]) -> List[str]:
+    urls = []
+    if attachment:
+        for file in attachment:
+            if file and file.filename:
+                content = await file.read()
+                ext = file.filename.split(".")[-1] if "." in file.filename else "bin"
+                key = f"attachments/{uuid.uuid4()}.{ext}"
+                _, url = upload_file(key, content, content_type=file.content_type)
+                urls.append(url)
+    return urls
+
+
+@router.post("/", response_model=AssignmentResponse)
 async def create_assignment(
     name: Optional[str] = Form(None),
     detail: Optional[str] = Form(None),
@@ -44,62 +85,22 @@ async def create_assignment(
     current_user: dict = Depends(get_current_user),
 ):
     try:
-        testcase_url: Optional[str] = None
-        if testcase and testcase.filename:
-            content = await testcase.read()
-            ext = testcase.filename.split(".")[-1] if "." in testcase.filename else "bin"
-            key = f"testcases/{uuid.uuid4()}.{ext}"
-            _, testcase_url = upload_file(key, content, content_type=testcase.content_type)
-
-        attachment_urls: List[str] = []
-        if attachment:
-            for file in attachment:
-                if file and file.filename:
-                    content = await file.read()
-                    ext = file.filename.split(".")[-1] if "." in file.filename else "bin"
-                    key = f"attachments/{uuid.uuid4()}.{ext}"
-                    _, url = upload_file(key, content, content_type=file.content_type)
-                    attachment_urls.append(url)
-
-        assignment = create_assignment_service(
-            db=db,
-            user_id=current_user["id"],
-            classroom_id=classroomId,
-            title=name,
-            description=detail,
-            start_date=startDate,
-            due_date=dueDate,
-            is_group=isGroup,
-            is_public=isPublic,
-            project_type_id=projecttypeId,
-            language_id=languageId,
-            testcase_url=testcase_url,
-            attachment_urls=attachment_urls,
+        data = CreateAssignmentRequest(
+            name=name, detail=detail, startDate=startDate, dueDate=dueDate,
+            isGroup=isGroup, isPublic=isPublic, projecttypeId=projecttypeId,
+            languageId=languageId, classroomId=classroomId,
         )
-
-        return CreateAssignmentResponse(
-            id=assignment.id,
-            name=assignment.title,
-            detail=assignment.description,
-            startDate=assignment.start_date,
-            dueDate=assignment.due_date,
-            isGroup=assignment.is_group,
-            isPublic=assignment.is_public,
-            projectType=assignment.project_type,
-            language=assignment.language,
-            testcaseUrl=assignment.testcase_url,
-            attachments=[
-                AttachmentResponse(id=a.id, fileUrl=a.file_url)
-                for a in assignment.attachments
-            ],
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+        testcase_url = await _upload_testcase(testcase)
+        attachment_urls = await _upload_attachments(attachment)
+        assignment = create_assignment_service(db, current_user["id"], data, testcase_url, attachment_urls)
+        return _build_response(assignment)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get("/", response_model=list[AssignmentListResponse])
+@router.get("/", response_model=List[AssignmentResponse])
 def get_assignments(
     classroomId: int,
     db: Session = Depends(get_db),
@@ -107,30 +108,14 @@ def get_assignments(
 ):
     try:
         assignments = get_assignments_service(db, current_user["id"], classroomId)
-        return [
-            AssignmentListResponse(
-                id=a.id,
-                name=a.title,
-                detail=a.description,
-                startDate=a.start_date,
-                dueDate=a.due_date,
-                isGroup=a.is_group,
-                isPublic=a.is_public,
-                projectType=a.project_type,
-                language=a.language,
-                testcaseUrl=a.testcase_url,
-                attachments=[
-                    AttachmentResponse(id=att.id, fileUrl=att.file_url)
-                    for att in a.attachments
-                ],
-            )
-            for a in assignments
-        ]
+        return [_build_response(a) for a in assignments]
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get("/{assignment_id}", response_model=AssignmentDetailResponse)
+@router.get("/{assignment_id}", response_model=AssignmentResponse)
 def get_assignment_by_id(
     assignment_id: int,
     db: Session = Depends(get_db),
@@ -138,29 +123,14 @@ def get_assignment_by_id(
 ):
     try:
         assignment = get_assignment_by_id_service(db, current_user["id"], assignment_id)
-        return AssignmentDetailResponse(
-            id=assignment.id,
-            name=assignment.title,
-            detail=assignment.description,
-            startDate=assignment.start_date,
-            dueDate=assignment.due_date,
-            isGroup=assignment.is_group,
-            isPublic=assignment.is_public,
-            projectType=assignment.project_type,
-            language=assignment.language,
-            testcaseUrl=assignment.testcase_url,
-            attachments=[
-                AttachmentResponse(id=a.id, fileUrl=a.file_url)
-                for a in assignment.attachments
-            ],
-        )
+        return _build_response(assignment)
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.put("/{assignment_id}", response_model=UpdateAssignmentResponse)
+@router.put("/{assignment_id}", response_model=AssignmentResponse)
 async def update_assignment(
     assignment_id: int,
     name: Optional[str] = Form(None),
@@ -176,44 +146,14 @@ async def update_assignment(
     current_user: dict = Depends(get_current_user),
 ):
     try:
-        testcase_url: Optional[str] = None
-        if testcase and testcase.filename:
-            content = await testcase.read()
-            ext = testcase.filename.split(".")[-1] if "." in testcase.filename else "bin"
-            key = f"testcases/{uuid.uuid4()}.{ext}"
-            _, testcase_url = upload_file(key, content, content_type=testcase.content_type)
-
-        assignment = update_assignment_service(
-            db=db,
-            user_id=current_user["id"],
-            assignment_id=assignment_id,
-            title=name,
-            description=detail,
-            start_date=startDate,
-            due_date=dueDate,
-            is_group=isGroup,
-            is_public=isPublic,
-            project_type_id=projecttypeId,
-            language_id=languageId,
-            testcase_url=testcase_url,
+        data = UpdateAssignmentRequest(
+            name=name, detail=detail, startDate=startDate, dueDate=dueDate,
+            isGroup=isGroup, isPublic=isPublic, projecttypeId=projecttypeId,
+            languageId=languageId,
         )
-
-        return UpdateAssignmentResponse(
-            id=assignment.id,
-            name=assignment.title,
-            detail=assignment.description,
-            startDate=assignment.start_date,
-            dueDate=assignment.due_date,
-            isGroup=assignment.is_group,
-            isPublic=assignment.is_public,
-            projectType=assignment.project_type,
-            language=assignment.language,
-            testcaseUrl=assignment.testcase_url,
-            attachments=[
-                AttachmentResponse(id=a.id, fileUrl=a.file_url)
-                for a in assignment.attachments
-            ],
-        )
+        testcase_url = await _upload_testcase(testcase)
+        assignment = update_assignment_service(db, current_user["id"], assignment_id, data, testcase_url)
+        return _build_response(assignment)
     except HTTPException:
         raise
     except Exception as e:

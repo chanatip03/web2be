@@ -6,8 +6,14 @@ from app.utils.archive import unzip_file, delete_directory
 from fastapi.responses import JSONResponse
 import os
 from fastapi.middleware.cors import CORSMiddleware
+from app.db.database import engine, Base
+import app.models
 
 app = FastAPI(title="WEB2 API")
+
+print("Creating tables...")
+Base.metadata.create_all(bind=engine)
+print("Done!")
 
 origins = [
     "http://localhost:3000",
