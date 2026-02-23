@@ -64,12 +64,3 @@ def save_result(submission_id: str, result: dict):
     out = RESULTS_DIR / f"{submission_id}.json"
     out.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info(f"Result saved: {out}")
-
-def get_project_info():
-    """แสดงข้อมูล environment สำหรับ debug"""
-    import os
-    return {
-        "submissions_dir": os.environ.get("SUBMISSIONS_DIR"),
-        "results_dir": os.environ.get("RESULTS_DIR"),
-        "snyk_image": os.environ.get("SNYK_IMAGE")
-    }

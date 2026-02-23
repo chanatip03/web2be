@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Response, APIRouter, Depends, status
+from fastapi import FastAPI, HTTPException, APIRouter
 from pydantic import BaseModel
 from .fs import get_submission_path, save_result, validate_submission
 from .snyk_code import scan_source_code

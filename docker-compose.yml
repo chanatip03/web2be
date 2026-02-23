@@ -26,14 +26,10 @@ services:
     volumes:
       - ./data/submissions:/app/data/submissions:ro
       - ./data/security_scan_results:/app/data/security_scan_results
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./data/submissions:/host/data/submissions:ro
     environment:
       SNYK_TOKEN: ${SNYK_TOKEN}
-      SNYK_IMAGE: ${SNYK_IMAGE:-student-snyk-code:1.0}
       SUBMISSIONS_DIR: /app/data/submissions
       RESULTS_DIR: /app/data/security_scan_results
-      HOST_SUBMISSIONS_BASE: /host/data/submissions
 
       DATABASE_HOST: database
       DATABASE_PORT: 5432
