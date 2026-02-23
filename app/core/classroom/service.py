@@ -88,7 +88,7 @@ def update_classroom_service(db: Session, classroom_id: int,current_user, payloa
         "name": payload.name,
         "semester": payload.semester,
         "description": payload.description,
-        "learningoutcomes": payload.learning_outcomes
+        "learningoutcomes": payload.learningoutcomes
     }
 
     updated_classroom = update_classroom(db, classroom, update_data)
