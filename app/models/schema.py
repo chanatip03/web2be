@@ -190,6 +190,8 @@ class Assignment(Base):
 
     classroom = relationship("Classroom", back_populates="assignments")
     attachments = relationship("Attachment", back_populates="assignment", cascade="all, delete-orphan")
+    project_type = relationship("ProjectType", back_populates="assignments")
+    language = relationship("Language", back_populates="assignments")
     projects = relationship("Project", back_populates="assignment", cascade="all, delete-orphan")
 
 class Attachment(Base):
@@ -212,11 +214,15 @@ class ProjectType(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(50), nullable=False, unique=True)
 
+    assignments = relationship("Assignment", back_populates="project_type")
+
 class Language(Base):
     __tablename__ = "languages"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(50), nullable=False, unique=True)
+
+    assignments = relationship("Assignment", back_populates="language")
 
 class Project(Base):
     __tablename__ = "projects"

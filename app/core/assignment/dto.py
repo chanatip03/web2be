@@ -1,9 +1,8 @@
-from pydantic import BaseModel
+from fastapi import Form
+from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 from typing import Optional, List
-
-
-class ProjectTypeResponse(BaseModel):
+class ProjectType(BaseModel):
     id: int
     name: str
 
@@ -11,7 +10,7 @@ class ProjectTypeResponse(BaseModel):
         from_attributes = True
 
 
-class LanguageResponse(BaseModel):
+class Language(BaseModel):
     id: int
     name: str
 
@@ -19,54 +18,118 @@ class LanguageResponse(BaseModel):
         from_attributes = True
 
 
-class AttachmentResponse(BaseModel):
+class Attachment(BaseModel):
     id: int
-    fileUrl: str
+    fileUrl: str = Field(..., alias="file_url")
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
-
-# Request — รับจาก form
 class CreateAssignmentRequest(BaseModel):
-    name: Optional[str] = None
-    detail: Optional[str] = None
-    startDate: Optional[datetime] = None
-    dueDate: Optional[datetime] = None
-    isGroup: bool = False
-    isPublic: bool = False
-    projecttypeId: Optional[int] = None
-    languageId: Optional[int] = None
-    classroomId: Optional[int] = None
+    title:str
+    description: Optional[str]
+    start_date: datetime
+    due_date: datetime
+    is_group: bool
+    project_type_id: int
+    language_id: int
+    classroom_id: int
 
-
+    @classmethod
+    def as_form(
+        cls,
+        title: str = Form(..., example="Lab 1: Python Basic"),
+        description: str = Form(..., example="Do something"),
+        start_date: datetime = Form(..., example="2026-02-24T10:00:00"),
+        due_date: Optional[datetime] = Form(..., example="2026-02-28T10:00:00"),
+        is_group: bool = Form(..., example=True),
+        project_type_id: int = Form(..., example=1),
+        language_id: int = Form(..., example=1),
+        classroom_id: int = Form(..., example=1),
+    ):
+        return cls(
+            title=title,
+            description=description,
+            start_date=start_date,
+            due_date=due_date,
+            is_group=is_group,
+            project_type_id=project_type_id,
+            language_id=language_id,
+            classroom_id=classroom_id,
+        )
+    class Config:
+        from_attributes = True
+        
 class UpdateAssignmentRequest(BaseModel):
-    name: Optional[str] = None
-    detail: Optional[str] = None
-    startDate: Optional[datetime] = None
-    dueDate: Optional[datetime] = None
-    isGroup: Optional[bool] = None
-    isPublic: Optional[bool] = None
-    projecttypeId: Optional[int] = None
-    languageId: Optional[int] = None
+    title: Optional[str]
+    description: Optional[str]
+    start_date: Optional[datetime]
+    due_date: Optional[datetime]
+    is_group: Optional[bool]
+    is_public: Optional[bool]
+    project_type_id: Optional[int]
+    language_id: Optional[int]
+    delete_attachment_ids: Optional[List[int]]
+    delete_testcase_url: Optional[str]
+    classroom_id: int
 
+    @field_validator("delete_attachment_ids", mode="before")
+    @classmethod
+    def parse_ids(cls, v):
+        if isinstance(v, str):
+            return [int(x.strip()) for x in v.split(",") if x.strip()]
+        return v
 
-# Response — ใช้ตัวเดียวกันทุก endpoint
+    @classmethod
+    def as_form(
+        cls,
+        title: Optional[str] = Form(None),
+        description: Optional[str] = Form(None),
+        start_date: Optional[datetime] = Form(None),
+        due_date: Optional[datetime] = Form(None),
+        is_group: Optional[bool] = Form(None),
+        is_public: Optional[bool] = Form(None),
+        project_type_id: Optional[int] = Form(None),
+        language_id: Optional[int] = Form(None),
+        classroom_id: int = Form(...),
+        delete_attachment_ids: Optional[str] = Form(None), 
+        delete_testcase_url: Optional[str] = Form(None),
+    ):
+        return cls(
+            title=title,
+            description=description,
+            start_date=start_date,
+            due_date=due_date,
+            is_group=is_group,
+            is_public=is_public,
+            project_type_id=project_type_id,
+            language_id=language_id,
+            classroom_id=classroom_id,
+            delete_attachment_ids=delete_attachment_ids, 
+            delete_testcase_url=delete_testcase_url,
+        )
+
+    class Config:
+        from_attributes = True
+
 class AssignmentResponse(BaseModel):
     id: int
-    name: str
-    detail: Optional[str] = None
-    startDate: datetime
-    dueDate: datetime
-    isGroup: bool
-    isPublic: bool
-    projectType: ProjectTypeResponse
-    language: LanguageResponse
-    testcaseUrl: Optional[str] = None
-    attachments: List[AttachmentResponse]
+    title: str
+    description: Optional[str]
+    start_date: datetime
+    due_date: datetime
+    is_group: bool
+    is_public: bool
+
+    projectType: ProjectType = Field(..., alias="project_type")
+    language: Language
+    testcaseUrl: Optional[str] = Field(None, alias="testcase_url")
+    attachments: List[Attachment]
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 
 class DeleteAssignmentResponse(BaseModel):

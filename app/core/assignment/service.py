@@ -1,109 +1,100 @@
 from typing import List, Optional
-from datetime import datetime
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException
 
 from app.core.teacher.repository import get_teacher_by_user_id
 from app.models.schema import Assignment, Attachment
+from app.utils.r2 import delete_file
 from .dto import CreateAssignmentRequest, UpdateAssignmentRequest
 from .repository import (
-    get_classroom_by_id,
-    get_project_type_by_id,
-    get_language_by_id,
+    create_assignment,
+    create_attachment,
+    delete_attachment_by_id,
     get_assignments_by_classroom,
     get_assignment_by_id,
+    get_attachment_by_id,
     update_assignment,
-    soft_delete_assignment,
 )
 
+from app.core.classroom.repository import (
+    get_classroom_by_id,
+    is_classroom_of_teacher
+)
 
 def create_assignment_service(
-    db: Session,
-    user_id: int,
     data: CreateAssignmentRequest,
     testcase_url: Optional[str],
     attachment_urls: List[str],
+    db: Session,
+    current_user,
 ):
-    teacher = get_teacher_by_user_id(db, user_id)
+    if current_user["role"] != "teacher":
+        raise ValueError("Only teachers can update classrooms")
+    teacher = get_teacher_by_user_id(db, current_user["id"])
     if not teacher:
         raise HTTPException(status_code=403, detail="Only teachers can create assignments")
-
-    classroom = get_classroom_by_id(db, data.classroomId)
+    classroom = get_classroom_by_id(db, data.classroom_id)
     if not classroom:
         raise HTTPException(status_code=404, detail="Classroom not found")
-    if classroom.teacher_id != teacher.id:
-        raise HTTPException(status_code=403, detail="You do not own this classroom")
-
-    if not get_project_type_by_id(db, data.projecttypeId):
-        raise HTTPException(status_code=404, detail="Project type not found")
-    if not get_language_by_id(db, data.languageId):
-        raise HTTPException(status_code=404, detail="Language not found")
-    if data.startDate >= data.dueDate:
+    owner = is_classroom_of_teacher(db, data.classroom_id, teacher.id)
+    if not owner:
+        raise ValueError("Classroom is not under  your control")
+    if data.due_date and data.start_date >= data.due_date:
         raise HTTPException(status_code=422, detail="startDate must be before dueDate")
-
+    
     assignment = Assignment(
-        classroom_id=data.classroomId,
-        title=data.name,
-        description=data.detail,
-        start_date=data.startDate,
-        due_date=data.dueDate,
-        is_group=data.isGroup,
-        is_public=data.isPublic,
-        project_type_id=data.projecttypeId,
-        language_id=data.languageId,
+        title=data.title,
+        description=data.description,
+        start_date=data.start_date,
+        due_date=data.due_date,
+        is_group=data.is_group,
+        project_type_id=data.project_type_id,
+        language_id=data.language_id,
+        classroom_id=data.classroom_id,
         testcase_url=testcase_url,
     )
-    db.add(assignment)
-    db.commit()
-    db.refresh(assignment)
 
-    for url in attachment_urls:
-        att = Attachment(assignment_id=assignment.id, file_url=url)
-        db.add(att)
-    db.commit()
-    db.refresh(assignment)
+    create_assignment(db, assignment)
+
+    attachments = [
+        Attachment(file_url=url, assignment_id=assignment.id)
+        for url in attachment_urls
+    ]
+    
+    create_attachment(db,attachments)
+    
+    assignment = get_assignment_by_id(db , assignment.id)
 
     return assignment
 
 
-def get_assignments_service(db: Session, user_id: int, classroom_id: int):
-    teacher = get_teacher_by_user_id(db, user_id)
-    if not teacher:
-        raise HTTPException(status_code=403, detail="Only teachers can view assignments")
-
+def get_assignments_service(db: Session, classroom_id: int):
     classroom = get_classroom_by_id(db, classroom_id)
     if not classroom:
         raise HTTPException(status_code=404, detail="Classroom not found")
-    if classroom.teacher_id != teacher.id:
-        raise HTTPException(status_code=403, detail="You do not own this classroom")
 
     return get_assignments_by_classroom(db, classroom_id)
 
-
-def get_assignment_by_id_service(db: Session, user_id: int, assignment_id: int):
-    teacher = get_teacher_by_user_id(db, user_id)
-    if not teacher:
-        raise HTTPException(status_code=403, detail="Only teachers can view assignments")
-
+def get_assignment_by_id_service(db: Session, assignment_id: int):
     assignment = get_assignment_by_id(db, assignment_id)
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found")
-
-    classroom = get_classroom_by_id(db, assignment.classroom_id)
-    if classroom.teacher_id != teacher.id:
-        raise HTTPException(status_code=403, detail="You do not own this assignment")
 
     return assignment
 
 
 def update_assignment_service(
-    db: Session,
-    user_id: int,
     assignment_id: int,
     data: UpdateAssignmentRequest,
     testcase_url: Optional[str],
+    attachment_urls: List[str],
+    db: Session,
+    current_user,
 ):
-    teacher = get_teacher_by_user_id(db, user_id)
+    if current_user["role"] != "teacher":
+        raise ValueError("Only teachers can update classrooms")
+
+    teacher = get_teacher_by_user_id(db, current_user["id"])
     if not teacher:
         raise HTTPException(status_code=403, detail="Only teachers can update assignments")
 
@@ -111,46 +102,58 @@ def update_assignment_service(
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found")
 
-    classroom = get_classroom_by_id(db, assignment.classroom_id)
-    if classroom.teacher_id != teacher.id:
-        raise HTTPException(status_code=403, detail="You do not own this assignment")
+    owner = is_classroom_of_teacher(db, assignment.classroom_id, teacher.id)
+    if not owner:
+        raise ValueError("Not your classroom")
 
-    if data.projecttypeId and not get_project_type_by_id(db, data.projecttypeId):
-        raise HTTPException(status_code=404, detail="Project type not found")
-    if data.languageId and not get_language_by_id(db, data.languageId):
-        raise HTTPException(status_code=404, detail="Language not found")
-
-    resolved_start = data.startDate or assignment.start_date
-    resolved_due = data.dueDate or assignment.due_date
-    if resolved_start >= resolved_due:
+    if data.start_date and data.due_date and data.start_date >= data.due_date:
         raise HTTPException(status_code=422, detail="startDate must be before dueDate")
 
-    update_data = {
-        "title": data.name,
-        "description": data.detail,
-        "start_date": data.startDate,
-        "due_date": data.dueDate,
-        "is_group": data.isGroup,
-        "is_public": data.isPublic,
-        "project_type_id": data.projecttypeId,
-        "language_id": data.languageId,
-        "testcase_url": testcase_url,
-    }
+    if data.delete_testcase_url and assignment.testcase_url:
+        delete_file(assignment.testcase_url)
+        assignment.testcase_url = None
 
-    return update_assignment(db, assignment, update_data)
+    if data.delete_attachment_ids:
+        for att_id in data.delete_attachment_ids:
+            attachment = get_attachment_by_id(db, att_id)
+
+            if not attachment:
+                continue
+
+            if attachment.assignment_id != assignment_id:
+                continue
+
+            delete_file(attachment.file_url)
+            delete_attachment_by_id(db, attachment)
+
+    if attachment_urls:
+        attachments = [
+            Attachment(file_url=url, assignment_id=assignment_id)
+            for url in attachment_urls
+        ]
+        create_attachment(db, attachments)
+
+    if testcase_url:
+        assignment.testcase_url = testcase_url
+
+    update_data = data.dict(exclude_unset=True)
+
+    update_assignment(db, assignment, update_data)
+
+    return assignment
 
 
-def delete_assignment_service(db: Session, user_id: int, assignment_id: int):
-    teacher = get_teacher_by_user_id(db, user_id)
-    if not teacher:
-        raise HTTPException(status_code=403, detail="Only teachers can delete assignments")
+# def delete_assignment_service(db: Session, user_id: int, assignment_id: int):
+#     teacher = get_teacher_by_user_id(db, user_id)
+#     if not teacher:
+#         raise HTTPException(status_code=403, detail="Only teachers can delete assignments")
 
-    assignment = get_assignment_by_id(db, assignment_id)
-    if not assignment:
-        raise HTTPException(status_code=404, detail="Assignment not found")
+#     assignment = get_assignment_by_id(db, assignment_id)
+#     if not assignment:
+#         raise HTTPException(status_code=404, detail="Assignment not found")
 
-    classroom = get_classroom_by_id(db, assignment.classroom_id)
-    if classroom.teacher_id != teacher.id:
-        raise HTTPException(status_code=403, detail="You do not own this assignment")
+#     classroom = get_classroom_by_id(db, assignment.classroom_id)
+#     if classroom.teacher_id != teacher.id:
+#         raise HTTPException(status_code=403, detail="You do not own this assignment")
 
-    soft_delete_assignment(db, assignment)
+#     soft_delete_assignment(db, assignment)

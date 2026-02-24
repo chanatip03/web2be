@@ -66,3 +66,16 @@ def get_file_bytes(key: str) -> bytes:
         return obj["Body"].read()
     except (BotoCoreError, ClientError) as e:
         raise RuntimeError(f"R2 get object failed: {e}")
+    
+def delete_file(url: str) -> bool:
+    client = _get_s3_client()
+    
+    key = url.replace(R2_PUBLIC_URL.rstrip('/') + "/", "")
+    try:
+        client.delete_object(
+            Bucket=R2_BUCKET,
+            Key=key
+        )
+        return True
+    except (BotoCoreError, ClientError) as e:
+        raise RuntimeError(f"R2 delete object failed: {e}")
