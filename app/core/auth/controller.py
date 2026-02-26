@@ -1,11 +1,12 @@
 from datetime import datetime, timezone
+from typing import Optional
 import uuid
 from fastapi import File, Form, Request, Response, APIRouter, Depends, HTTPException, UploadFile
 from pydantic import EmailStr
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.utils.r2 import upload_file
-from .dto import LoginRequest, Token
+from .dto import LoginRequest, Token, VerifyOtpRequest, register_request
 from .service import authenticate_admin, authenticate_user
 from app.utils.generate_token import create_access_token , decode_token
 from app.utils.otp import (
@@ -29,6 +30,7 @@ def _set_token_cookie(response: Response, token: str):
         max_age=3600,
         samesite="lax",
         secure=False,
+        path="/",
     )
 
 
@@ -66,27 +68,16 @@ def login(data: LoginRequest, response: Response, db: Session = Depends(get_db))
 
 @router.post("/request-otp")
 async def request_otp(
-    role: str = Form(...),
-    first_name: str = Form(...),
-    last_name: str = Form(...),
-    email: EmailStr = Form(...),
-    password: str = Form(...),
-    academy: str = Form(...),
-    student_id: str | None = Form(None),
-    certificate: UploadFile | None = File(None),
+    data : register_request = Depends(register_request.as_form),
+    student_id: Optional[str] = Form(None),
+    certificate: Optional[UploadFile] = File(None),
 ):
     otp = generate_otp()
+    
+    if(data.role == "student"):
+        data.student_id = student_id
 
-    payload_data = {
-        "first_name": first_name,
-        "last_name": last_name,
-        "email": email,
-        "password": password,
-        "academy": academy,
-        "student_id": student_id,
-    }
-
-    if role == "teacher":
+    if data.role == "teacher":
         if not certificate:
             raise HTTPException(400, "Certificate required")
 
@@ -94,23 +85,26 @@ async def request_otp(
         key = f"certificates/{uuid.uuid4()}.{certificate.filename.split('.')[-1]}"
         _, url = upload_file(key, content, content_type=certificate.content_type)
 
-        payload_data["certificate_url"] = url
+        data.certificate_url = url
 
     save_otp_memory(
-    email=email,
+    email=data.email,
     otp_hash=hash_otp(otp),
     payload={
-        "role": role,
-        "data": payload_data
+        "role": data.role,
+        "data": data.model_dump(),
     }
 )
-    print("SAVE OTP FOR:", email)
+    print("SAVE OTP FOR:", data.email)
 
-    send_otp_email(email, otp)
+    send_otp_email(data.email, otp)
     return {"message": "OTP sent"}
 
 @router.post("/verify-otp")
-def verify_otp(email: str, otp: str, db: Session = Depends(get_db)):
+def verify_otp(data: VerifyOtpRequest, db: Session = Depends(get_db)):
+    email = data.email
+    otp = data.otp
+    
     record = get_otp_memory(email)
     if not record:
         raise HTTPException(status_code=400, detail="OTP not found")
@@ -130,6 +124,9 @@ def verify_otp(email: str, otp: str, db: Session = Depends(get_db)):
     payload = record["payload"]
     role = payload["role"]
     data = payload["data"]
+
+    if isinstance(data, dict) is False:
+        data = data.model_dump()
 
     try:
         if role == "student":
@@ -161,14 +158,13 @@ def verify_otp(email: str, otp: str, db: Session = Depends(get_db)):
 
     return {
         "message": "Register success",
-        "user_id": user.id,
-        "role": role
     }
 
 
 @router.get("/me")
 async def check_user_token(request: Request):
     token = request.cookies.get("access_token")
+    print(token)
     if not token:
         raise HTTPException(status_code=401, detail="No access token")
     
