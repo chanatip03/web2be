@@ -14,7 +14,6 @@ def is_student_in_classroom(db: Session, classroom_id: int, student_id: int) -> 
     return ( db.query(ClassroomMember).filter(
         ClassroomMember.classroom_id == classroom_id,
         ClassroomMember.student_id == student_id,
-        ClassroomMember.deleted_date.is_(None)
     ).first()
     )
 

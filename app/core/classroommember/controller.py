@@ -22,7 +22,7 @@ def join_classroom_endpoint(
 ):    
     try:
         result = join_classroom_by_code( db , current_user["id"] ,classroom_id , code)
-        return ClassroomMemberResponse.model_validate(result)
+        return result
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

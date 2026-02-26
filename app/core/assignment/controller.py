@@ -16,6 +16,7 @@ from .service import (
     update_assignment_service,
     get_assignments_service,
     get_assignment_by_id_service,
+    delete_assignment_service
 )
 
 router = APIRouter(prefix="/assignment", tags=["Assignment"])
@@ -29,12 +30,15 @@ async def create_assignment(
     current_user = Depends(get_current_user),
     ):
     try:
-        file_bytes = await testcase.read()
-        _, testcase_url = upload_file(
-        f"testcase/{data.title}/{testcase.filename}",
-        file_bytes,
-        testcase.content_type
-        )
+        if testcase:
+            file_bytes = await testcase.read()
+            _, testcase_url = upload_file(
+            f"testcase/{data.title}/{testcase.filename}",
+            file_bytes,
+            testcase.content_type
+            )
+        else:
+            testcase_url = None
         
         attachment_urls = []
         for file in attachment:
@@ -135,16 +139,16 @@ async def update_assignment(
             detail=f"Failed to update assignment: {str(e)}"
         )
 
-# @router.delete("/{assignment_id}", response_model=DeleteAssignmentResponse)
-# def delete_assignment(
-#     assignment_id: int,
-#     db: Session = Depends(get_db),
-#     current_user: dict = Depends(get_current_user),
-# ):
-#     try:
-#         delete_assignment_service(db, current_user["id"], assignment_id)
-#         return DeleteAssignmentResponse(message="Assignment deleted successfully")
-#     except HTTPException:
-#         raise
-#     except Exception as e:
-#         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+@router.delete("/{assignment_id}", response_model=AssignmentResponse)
+def delete_assignment(
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        assignment = delete_assignment_service(db, current_user, assignment_id)
+        return assignment
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))

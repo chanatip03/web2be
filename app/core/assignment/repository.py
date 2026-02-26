@@ -83,7 +83,9 @@ def update_assignment(db: Session, assignment: Assignment, update_data: dict) ->
     return assignment
 
 
-def soft_delete_assignment(db: Session, assignment: Assignment) -> None:
+def soft_delete_assignment(db: Session, assignment: Assignment) -> Assignment:
     assignment.deleted_date = datetime.now(timezone.utc)
     db.commit()
     db.refresh(assignment)
+    return assignment
+    

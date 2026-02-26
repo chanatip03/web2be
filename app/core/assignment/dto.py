@@ -33,19 +33,19 @@ class CreateAssignmentRequest(BaseModel):
     due_date: datetime
     is_group: bool
     project_type_id: int
-    language_id: int
+    language_id: Optional[int]
     classroom_id: int
 
     @classmethod
     def as_form(
         cls,
         title: str = Form(..., example="Lab 1: Python Basic"),
-        description: str = Form(..., example="Do something"),
-        start_date: datetime = Form(..., example="2026-02-24T10:00:00"),
-        due_date: Optional[datetime] = Form(..., example="2026-02-28T10:00:00"),
+        description: str = Form(None, example="Do something"),
+        start_date: str = Form(...),
+        due_date: str = Form(...),
         is_group: bool = Form(..., example=True),
         project_type_id: int = Form(..., example=1),
-        language_id: int = Form(..., example=1),
+        language_id: Optional[int] = Form(None, example=1),
         classroom_id: int = Form(..., example=1),
     ):
         return cls(

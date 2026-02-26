@@ -13,6 +13,7 @@ from .repository import (
     get_assignments_by_classroom,
     get_assignment_by_id,
     get_attachment_by_id,
+    soft_delete_assignment,
     update_assignment,
 )
 
@@ -143,17 +144,22 @@ def update_assignment_service(
     return assignment
 
 
-# def delete_assignment_service(db: Session, user_id: int, assignment_id: int):
-#     teacher = get_teacher_by_user_id(db, user_id)
-#     if not teacher:
-#         raise HTTPException(status_code=403, detail="Only teachers can delete assignments")
+def delete_assignment_service(db: Session, current_user, assignment_id: int):
+    if current_user["role"] != "teacher":
+        raise ValueError("Only teachers can update classrooms")
 
-#     assignment = get_assignment_by_id(db, assignment_id)
-#     if not assignment:
-#         raise HTTPException(status_code=404, detail="Assignment not found")
+    teacher = get_teacher_by_user_id(db, current_user["id"])
+    if not teacher:
+        raise HTTPException(status_code=403, detail="Only teachers can update assignments")
 
-#     classroom = get_classroom_by_id(db, assignment.classroom_id)
-#     if classroom.teacher_id != teacher.id:
-#         raise HTTPException(status_code=403, detail="You do not own this assignment")
+    assignment = get_assignment_by_id(db, assignment_id)
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
 
-#     soft_delete_assignment(db, assignment)
+    owner = is_classroom_of_teacher(db, assignment.classroom_id, teacher.id)
+    if not owner:
+        raise ValueError("Not your classroom")
+
+    assignment = soft_delete_assignment(db, assignment)
+    
+    return assignment
