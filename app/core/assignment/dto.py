@@ -1,7 +1,11 @@
 from fastapi import Form
 from pydantic import BaseModel, Field, field_validator
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
+from zoneinfo import ZoneInfo
+
+THAI_TZ = ZoneInfo("Asia/Bangkok")
+
 class ProjectType(BaseModel):
     id: int
     name: str
@@ -41,8 +45,8 @@ class CreateAssignmentRequest(BaseModel):
         cls,
         title: str = Form(..., example="Lab 1: Python Basic"),
         description: str = Form(None, example="Do something"),
-        start_date: str = Form(...),
-        due_date: str = Form(...),
+        start_date: datetime = Form(...), 
+        due_date: datetime = Form(...), 
         is_group: bool = Form(..., example=True),
         project_type_id: int = Form(..., example=1),
         language_id: Optional[int] = Form(None, example=1),
@@ -58,6 +62,14 @@ class CreateAssignmentRequest(BaseModel):
             language_id=language_id,
             classroom_id=classroom_id,
         )
+    
+    @field_validator("start_date", "due_date", mode="before")
+    @classmethod
+    def set_timezone(cls, v):
+        if isinstance(v, datetime) and v.tzinfo is None:
+            return v.replace(tzinfo=THAI_TZ)
+        return v
+    
     class Config:
         from_attributes = True
         
@@ -109,6 +121,13 @@ class UpdateAssignmentRequest(BaseModel):
             delete_attachment_ids=delete_attachment_ids, 
             delete_testcase_url=delete_testcase_url,
         )
+        
+    @field_validator("start_date", "due_date", mode="before")
+    @classmethod
+    def set_timezone(cls, v):
+        if isinstance(v, datetime) and v.tzinfo is None:
+            return v.replace(tzinfo=THAI_TZ)
+        return v
 
     class Config:
         from_attributes = True
@@ -123,7 +142,7 @@ class AssignmentResponse(BaseModel):
     is_public: bool
 
     projectType: ProjectType = Field(..., alias="project_type")
-    language: Language
+    language: Optional[Language]
     testcaseUrl: Optional[str] = Field(None, alias="testcase_url")
     attachments: List[Attachment]
 

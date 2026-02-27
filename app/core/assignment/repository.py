@@ -1,5 +1,6 @@
 from typing import Optional, List
 from datetime import datetime, timezone
+from sqlalchemy import desc
 from sqlalchemy.orm import Session, joinedload, with_loader_criteria
 from app.models.schema import Assignment, Attachment, ProjectType, Language
 
@@ -58,6 +59,8 @@ def get_assignments_by_classroom(db: Session, classroom_id: int) -> List[Assignm
             ).filter(
             Assignment.classroom_id == classroom_id,
             Assignment.deleted_date.is_(None)
+            ).order_by(
+                desc(Assignment.created_date)
             ).all()
 
 

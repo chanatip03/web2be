@@ -1,3 +1,4 @@
+from datetime import timezone
 from typing import List, Optional
 from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException
@@ -46,8 +47,8 @@ def create_assignment_service(
     assignment = Assignment(
         title=data.title,
         description=data.description,
-        start_date=data.start_date,
-        due_date=data.due_date,
+        start_date=data.start_date.astimezone(timezone.utc),
+        due_date=data.due_date.astimezone(timezone.utc),
         is_group=data.is_group,
         project_type_id=data.project_type_id,
         language_id=data.language_id,
@@ -160,6 +161,6 @@ def delete_assignment_service(db: Session, current_user, assignment_id: int):
     if not owner:
         raise ValueError("Not your classroom")
 
-    assignment = soft_delete_assignment(db, assignment)
+    assignment = soft_delete_assignment(db, assignment, tz)
     
     return assignment

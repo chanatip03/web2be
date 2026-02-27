@@ -172,8 +172,8 @@ class Assignment(Base):
     title = Column(String(100), nullable=False)
     description = Column(String, nullable=True)
 
-    start_date = Column(DateTime, nullable=False, server_default=func.now())
-    due_date = Column(DateTime, nullable=False)
+    start_date = Column(DateTime(timezone=True), nullable=False)
+    due_date = Column(DateTime(timezone=True), nullable=False)
 
     is_group = Column(Boolean, default=False)
     is_public = Column(Boolean, default=False)
@@ -182,7 +182,7 @@ class Assignment(Base):
     plagiarism_result = Column(JSON, nullable=True)
 
     project_type_id = Column(Integer, ForeignKey("project_types.id", ondelete="CASCADE"), nullable=False)
-    language_id = Column(Integer, ForeignKey("languages.id", ondelete="CASCADE"), nullable=False)
+    language_id = Column(Integer, ForeignKey("languages.id", ondelete="CASCADE"), nullable=True)
 
     created_date = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_date = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

@@ -1,3 +1,4 @@
+from sqlalchemy import desc
 from sqlalchemy.orm import Session, joinedload
 from app.models.schema import Classroom, Teacher, ClassroomMember, Student
 
@@ -26,8 +27,9 @@ def get_classrooms_by_teacher_id(db: Session, teacher_id: int):
         .filter(
             Classroom.teacher_id == teacher_id,
             Classroom.deleted_date.is_(None)
-        )
-        .all()
+        ).order_by(
+            desc(Classroom.created_date)
+        ).all()
     )
 
 def get_classrooms_by_student_id(db: Session, student_id: int):
