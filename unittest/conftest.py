@@ -1,137 +1,112 @@
 """
-Shared fixtures สำหรับ unit tests ทั้งหมด
-"""
-import os
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
-os.environ.setdefault("SECRET_KEY", "test-secret-key")
-os.environ.setdefault("HASH_ALGORITHM", "HS256")
-os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MINUTES", "60")
-os.environ.setdefault("SUBMISSIONS_DIR", "/tmp/submissions")
-os.environ.setdefault("RESULTS_DIR", "/tmp/results")
+conftest.py
 
+KEY FIXES:
+1. StaticPool: all connections share one SQLite in-memory database
+2. seed_user: include `academy=""` — ClassroomResponse.teacher.user.academy is `str` not Optional[str],
+   so None causes ResponseValidationError when FastAPI serializes the response
+3. seed_teacher: include `certificate_url=""` — same reason, ClassroomResponse.teacher.certificate_url is str
+"""
 import pytest
-from unittest.mock import MagicMock, patch
+from datetime import datetime, timezone
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from datetime import datetime, timezone
+from sqlalchemy.pool import StaticPool
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
-from app.models.schema import Base, User, Teacher, Student, Role, Classroom, ClassroomMember, RoleEnum, Admin
+from app.db.database import Base, get_db
+from app.utils.validator import get_current_user
+from app.models.schema import User, Teacher, Student, Classroom, ClassroomMember
+from app.core.classroom.controller import router
 
 
-# ─────────────────────────────────────────────
-# In-memory SQLite engine สำหรับ test
-# ─────────────────────────────────────────────
 @pytest.fixture(scope="function")
 def engine():
-    eng = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
-    Base.metadata.create_all(eng)
-    yield eng
-    Base.metadata.drop_all(eng)
+    e = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=e)
+    yield e
+    Base.metadata.drop_all(bind=e)
 
 
 @pytest.fixture(scope="function")
 def db(engine):
-    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    Session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
     session = Session()
     yield session
-    session.rollback()
     session.close()
 
 
-# ─────────────────────────────────────────────
-# Helper: สร้าง User จริงใน DB
-# ─────────────────────────────────────────────
-@pytest.fixture
-def make_user(db):
-    def _make(
-        first_name="John",
-        last_name="Doe",
-        email="john@test.com",
-        password="hashed_pw",
-        academy="TestU",
-    ):
-        user = User(
-            first_name=first_name,
-            last_name=last_name,
-            email=email,
-            password=password,
-            academy=academy,
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-        return user
-    return _make
+def make_client(engine, current_user_data: dict) -> TestClient:
+    app = FastAPI()
+    app.include_router(router)
+
+    Session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    def override_get_db():
+        session = Session()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = lambda: current_user_data
+    return TestClient(app)
 
 
-@pytest.fixture
-def make_teacher(db, make_user):
-    def _make(email="teacher@test.com", first_name="Alice", last_name="Smith"):
-        user = make_user(first_name=first_name, last_name=last_name, email=email)
-        teacher = Teacher(user_id=user.id, certificate_url="https://example.com/cert.pdf")
-        db.add(teacher)
-        db.commit()
-        db.refresh(teacher)
-        return user, teacher
-    return _make
+def seed_user(db, email="user@test.com", first_name="Alice", last_name="Smith"):
+    user = User(
+        first_name=first_name,
+        last_name=last_name,
+        email=email,
+        password="hashed",
+        academy="",          # ClassroomResponse.teacher.user.academy: str (not Optional)
+    )
+    db.add(user)
+    db.flush()
+    db.refresh(user)
+    return user
 
 
-@pytest.fixture
-def make_student(db, make_user):
-    def _make(email="student@test.com", student_id="STU001"):
-        user = make_user(email=email, first_name="Bob", last_name="Lee")
-        student = Student(user_id=user.id, student_id=student_id)
-        db.add(student)
-        db.commit()
-        db.refresh(student)
-        return user, student
-    return _make
+def seed_teacher(db, email="teacher@test.com"):
+    user = seed_user(db, email=email)
+    teacher = Teacher(
+        user_id=user.id,
+        certificate_url="",  # ClassroomResponse.teacher.certificate_url: str (not Optional)
+    )
+    db.add(teacher)
+    db.commit()
+    db.refresh(teacher)
+    return user, teacher
 
 
-@pytest.fixture
-def make_classroom(db, make_teacher):
-    def _make(name="Test Class", semester="1/2025", code="ABCD1234"):
-        user, teacher = make_teacher()
-        classroom = Classroom(
-            name=name,
-            code=code,
-            semester=semester,
-            description="Test description",
-            teacher_id=teacher.id,
-        )
-        db.add(classroom)
-        db.commit()
-        db.refresh(classroom)
-        return classroom, teacher, user
-    return _make
+def seed_student(db, email="student@test.com"):
+    user = seed_user(db, email=email, first_name="Bob", last_name="Jones")
+    student = Student(user_id=user.id)
+    db.add(student)
+    db.commit()
+    db.refresh(student)
+    return user, student
 
 
-@pytest.fixture
-def make_admin(db):
-    def _make(email="admin@test.com", password="hashed_pw"):
-        admin = Admin(email=email, password=password)
-        db.add(admin)
-        db.commit()
-        db.refresh(admin)
-        return admin
-    return _make
+def seed_classroom(db, teacher_id, name="CS101", semester="1/2025", deleted=False):
+    c = Classroom(
+        name=name,
+        code=f"{name[:3].upper()}{teacher_id}",
+        semester=semester,
+        teacher_id=teacher_id,
+        deleted_date=datetime.now(timezone.utc) if deleted else None,
+    )
+    db.add(c)
+    db.commit()
+    db.refresh(c)
+    return c
 
 
-# ─────────────────────────────────────────────
-# FastAPI TestClient
-# ─────────────────────────────────────────────
-@pytest.fixture
-def client(db):
-    from fastapi import FastAPI
-    from app.core import api_router
-    from app.db.database import get_db
-    from starlette.testclient import TestClient
-
-    application = FastAPI()
-    application.include_router(api_router, prefix="/api")
-
-    # ใช้ session เดียวกับ db fixture → tables ถูกสร้างแล้ว
-    application.dependency_overrides[get_db] = lambda: db
-
-    with TestClient(application) as c:
-        yield c
+def current_user_payload(user_id: int, role: str) -> dict:
+    return {"id": user_id, "role": role}
