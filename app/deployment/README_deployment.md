@@ -106,16 +106,22 @@ RESULTS_DIR=./data/results
 - `LITAI_API_KEY`
 - `LITAI_MODEL` (default `lightning-ai/DeepSeek-V3.1`)
 - `LITAI_API_URL`
+- `LLM_ADVISORY_ONLY` (default `false`)
 - `DATA_DIR` (default `./data`)
 - `PROJECTS_DIR` (default `./data/projects`)
 - `DEPLOYMENTS_DIR` (default `./data/deployments`)
 - `BASE_PREVIEW_PORT` (default `3000`)
 - `DOCKER_NETWORK` (default `deployer-shared`)
 - `DOCKER_BUILD_TIMEOUT_SECONDS` (default `1200`)
+- `PUBLIC_BASE_URL` (เช่น ngrok/public URL ของ API ตัวนี้)
 
 หมายเหตุ:
-- ถ้าไม่ใช้ LLM จริง ให้ปล่อย `LITAI_API_KEY` ว่างได้ แต่คุณภาพ/พฤติกรรมวิเคราะห์ขึ้นกับ fallback ในระบบ
+- โหมดปกติของระบบนี้ต้องใช้ `LITAI_API_KEY`; ถ้าไม่ตั้งค่า จะ fail ตอนเรียก LLM
+- ถ้าต้องการรันแบบไม่ใช้ LLM จริง ให้ตั้ง `LLM_ADVISORY_ONLY=true` เพื่อให้ระบบใช้ deterministic fallback แทนบางส่วน
+- ถ้าจะเปิดใช้งานผ่าน ngrok หรือ reverse proxy ควรตั้ง `PUBLIC_BASE_URL` ให้เป็น base URL ภายนอก เพื่อให้ preview/linking ตรงกับ URL ที่ผู้ใช้เข้าจริง
 - โฟลเดอร์ `data` จะถูกใช้เก็บ metadata และ artifact
+- ระบบจะเรียก LLM แบบเข้าคิวทีละงาน และจะถือคิวไว้ตลอดช่วง retry/backoff ของงานนั้น เพื่อไม่ให้ deployment หลายตัว interleave request ใส่ provider พร้อมกัน
+- ถ้าเจอ `429 Too Many Requests` จาก Lightning AI deployment จะช้าลงหรือ fail ได้ เพราะระบบมี retry อัตโนมัติแต่ยังขึ้นกับ quota ของ provider
 
 ## 4. วิธีทดสอบการใช้งาน (แนะนำ)
 
@@ -131,6 +137,11 @@ RESULTS_DIR=./data/results
 3. Poll `GET /api/deploy/{id}/status` จน deployment เป็น `success` หรือ `error`
 4. เปิด `GET /preview/{id}`
 5. เช็ก logs ผ่าน `GET /api/deployments/{id}/logs`
+
+หมายเหตุจากการทดสอบจริง:
+- `frontend-only` เปิดผ่าน `GET /preview/{id}`
+- `backend-only` มักเช็กได้ผ่าน `GET /preview/{id}/swagger` หรือ endpoint health ของ backend ที่ถูก proxy ออกมา
+- `fullstack` มักมี frontend ที่ `GET /preview/{id}` และ backend ที่ `GET /preview/{id}/backend/...`
 
 ตัวอย่าง body:
 
@@ -169,7 +180,7 @@ RESULTS_DIR=./data/results
 ## 5. Postman Workflow (ใช้งานจริง)
 
 ตั้งค่า Environment ใน Postman:
-- `baseUrl` = `http://127.0.0.1:8000`
+- `baseUrl` = `http://127.0.0.1:8000` หรือ public URL เช่น ngrok (`https://<your-ngrok>.ngrok-free.app`)
 - `projectId` = ว่างก่อน
 - `deploymentId` = ว่างก่อน
 
@@ -207,6 +218,14 @@ pm.environment.set("deploymentId", data.id);
 - Method: `GET`
 - URL: `{{baseUrl}}/api/deployments/{{deploymentId}}/health`
 
+ถ้าเป็น public usage ผ่าน ngrok และตั้ง `PUBLIC_BASE_URL` ไว้แล้ว preview ที่เปิดใน browser ควรใช้รูปแบบ:
+
+```text
+{{baseUrl}}/preview/{{projectId}}
+{{baseUrl}}/preview/{{projectId}}/swagger
+{{baseUrl}}/preview/{{projectId}}/backend/<path>
+```
+
 ## 6. สิ่งที่ควรใส่เพิ่มในการทดสอบ (แนะนำทีม)
 
 เพื่อให้การทดสอบมีคุณภาพ ควรครอบคลุม:
@@ -228,6 +247,15 @@ pm.environment.set("deploymentId", data.id);
 - Error: preview เปิดไม่ขึ้น
   - เช็ก `GET /api/deployments/{deployment_id}/status`
   - เช็ก `build-logs` และ `logs`
+  - ถ้าเป็น `fullstack` ให้ลอง path ของ backend ผ่าน `/preview/{project_id}/backend/...`
+
+- Error: `LITAI_API_KEY is not set`
+  - ตั้ง `LITAI_API_KEY` ใน `.env`
+  - หรือสลับเป็น `LLM_ADVISORY_ONLY=true` ถ้าต้องการใช้ deterministic fallback
+
+- Error: `429 Too Many Requests`
+  - เป็น quota/rate-limit ของ Lightning AI
+  - ลดจำนวน deploy พร้อมกัน หรือรอ retry/backoff ให้ครบก่อนสรุปว่า fail
 
 - Error: รัน compose ไม่ได้
   - เช็กว่าเครื่องมี `docker compose` (v2) ไม่ใช่ `docker-compose` เก่า

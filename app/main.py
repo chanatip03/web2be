@@ -31,8 +31,8 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix="/api")
-app.include_router(deployment_router)
 app.include_router(testcase_router)
+app.include_router(deployment_router)
 
 @app.get("/")
 def health():

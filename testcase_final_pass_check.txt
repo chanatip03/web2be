@@ -1,0 +1,57 @@
+Creating tables...
+2026-03-10 15:00:10,902 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-10 15:00:10,902 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("admins")
+2026-03-10 15:00:10,902 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 15:00:10,903 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("role_users")
+2026-03-10 15:00:10,903 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 15:00:10,903 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("users")
+2026-03-10 15:00:10,903 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 15:00:10,903 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("roles")
+2026-03-10 15:00:10,904 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 15:00:10,904 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("students")
+2026-03-10 15:00:10,904 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 15:00:10,904 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("teachers")
+2026-03-10 15:00:10,904 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 15:00:10,904 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("classrooms")
+2026-03-10 15:00:10,905 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 15:00:10,905 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("classroom_members")
+2026-03-10 15:00:10,905 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 15:00:10,905 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("assignments")
+2026-03-10 15:00:10,905 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 15:00:10,905 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("attachments")
+2026-03-10 15:00:10,906 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 15:00:10,906 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("project_types")
+2026-03-10 15:00:10,906 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 15:00:10,906 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("languages")
+2026-03-10 15:00:10,906 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 15:00:10,906 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("projects")
+2026-03-10 15:00:10,906 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 15:00:10,907 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("project_files")
+2026-03-10 15:00:10,907 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 15:00:10,907 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("project_git")
+2026-03-10 15:00:10,907 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 15:00:10,907 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("groups")
+2026-03-10 15:00:10,907 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 15:00:10,908 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("group_members")
+2026-03-10 15:00:10,908 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 15:00:10,908 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("submission_of")
+2026-03-10 15:00:10,908 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 15:00:10,908 INFO sqlalchemy.engine.Engine COMMIT
+Done!
+GEN_STATUS 200
+RUN_STATUS 200
+{"test_id": "d8ecd578-6377-4d5b-89ca-b1310573324c", "run_id": "c344b763-5c57-4250-ac28-fdc11beb5278", "status": "passed", "total": 2, "passed": 2, "failed": 0, "report_path": "/teamspace/studios/this_studio/merge/web2be/app/deployment/data/projects/b8ef0f32-e3f2-45ff-9a71-2df5edc30472/tests/results/c344b763-5c57-4250-ac28-fdc11beb5278/report.html"}
+==============================================================================
+D8Ecd578-6377-4D5B-89Ca-B1310573324C                                          
+==============================================================================
+GET Root Endpoint Should Return 200 :: Test that GET request to ro... | PASS |
+------------------------------------------------------------------------------
+GET Health Endpoint Should Return 200 :: Test that GET request to ... | PASS |
+------------------------------------------------------------------------------
+D8Ecd578-6377-4D5B-89Ca-B1310573324C                                  | PASS |
+2 tests, 2 passed, 0 failed
+==============================================================================
+Output:  /teamspace/studios/this_studio/merge/web2be/app/deployment/data/projects/b8ef0f32-e3f2-45ff-9a71-2df5edc30472/tests/results/c344b763-5c57-4250-ac28-fdc11beb5278/output.xml
+Log:     /teamspace/studios/this_studio/merge/web2be/app/deployment/data/projects/b8ef0f32-e3f2-45ff-9a71-2df5edc30472/tests/results/c344b763-5c57-4250-ac28-fdc11beb5278/log.html
+Report:  /teamspace/studios/this_studio/merge/web2be/app/deployment/data/projects/b8ef0f32-e3f2-45ff-9a71-2df5edc30472/tests/results/c344b763-5c57-4250-ac28-fdc11beb5278/report.html
+

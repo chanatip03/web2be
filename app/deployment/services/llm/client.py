@@ -177,100 +177,101 @@ class LLMClient:
 
         t0 = time.perf_counter()
 
-        # Retry loop with exponential backoff
+        # Retry loop with exponential backoff.
+        # Keep the same global/local queue slot for the full request lifecycle so
+        # other deployment jobs cannot interleave while this one is retrying.
         last_error: Exception | None = None
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                # Serialize across all deployment background threads.
-                global_sem = _get_global_llm_semaphore()
-                await asyncio.to_thread(global_sem.acquire)
-                try:
-                    async with self._get_semaphore():
+        global_sem = _get_global_llm_semaphore()
+        await asyncio.to_thread(global_sem.acquire)
+        try:
+            async with self._get_semaphore():
+                for attempt in range(1, self.max_retries + 1):
+                    try:
                         async with httpx.AsyncClient(timeout=self.timeout) as client:
                             resp = await client.post(self.api_url, headers=headers, json=payload)
                             resp.raise_for_status()
                             data = resp.json()
-                finally:
-                    try:
-                        global_sem.release()
-                    except Exception:
-                        pass
 
-                choices = data.get("choices", [])
-                if not choices:
-                    raise LLMError(f"Empty choices in LLM response: {data}")
+                        choices = data.get("choices", [])
+                        if not choices:
+                            raise LLMError(f"Empty choices in LLM response: {data}")
 
-                response_text = choices[0]["message"]["content"]
-                duration_ms = (time.perf_counter() - t0) * 1000
+                        response_text = choices[0]["message"]["content"]
+                        duration_ms = (time.perf_counter() - t0) * 1000
 
-                usage = data.get("usage") if isinstance(data, dict) else None
-                prompt_tokens = None
-                completion_tokens = None
-                total_tokens = None
-                if isinstance(usage, dict):
-                    prompt_tokens = usage.get("prompt_tokens")
-                    completion_tokens = usage.get("completion_tokens")
-                    total_tokens = usage.get("total_tokens")
+                        usage = data.get("usage") if isinstance(data, dict) else None
+                        prompt_tokens = None
+                        completion_tokens = None
+                        total_tokens = None
+                        if isinstance(usage, dict):
+                            prompt_tokens = usage.get("prompt_tokens")
+                            completion_tokens = usage.get("completion_tokens")
+                            total_tokens = usage.get("total_tokens")
 
-                self._log_llm_response(
-                    step,
-                    response_text,
-                    True,
-                    "",
-                    prompt_tokens,
-                    completion_tokens,
-                    total_tokens,
-                )
+                        self._log_llm_response(
+                            step,
+                            response_text,
+                            True,
+                            "",
+                            prompt_tokens,
+                            completion_tokens,
+                            total_tokens,
+                        )
 
-                # Log successful conversation
-                self._log_conversation(
-                    step=step,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    response=response_text,
-                    request_payload=payload,
-                    response_json=data if isinstance(data, dict) else {"raw": data},
-                    temperature=temperature,
-                    duration_ms=duration_ms,
-                    success=True,
-                    prompt_tokens_est=prompt_tokens_est,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=total_tokens,
-                    max_tokens=payload.get("max_tokens"),
-                )
+                        # Log successful conversation
+                        self._log_conversation(
+                            step=step,
+                            system_prompt=system_prompt,
+                            user_prompt=user_prompt,
+                            response=response_text,
+                            request_payload=payload,
+                            response_json=data if isinstance(data, dict) else {"raw": data},
+                            temperature=temperature,
+                            duration_ms=duration_ms,
+                            success=True,
+                            prompt_tokens_est=prompt_tokens_est,
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            total_tokens=total_tokens,
+                            max_tokens=payload.get("max_tokens"),
+                        )
 
-                return response_text
+                        return response_text
 
-            except httpx.HTTPStatusError as exc:
-                status = exc.response.status_code
-                last_error = LLMError(
-                    f"Lightning AI returned {status}: "
-                    f"{exc.response.text[:500]}"
-                )
-                logger.warning("LLM attempt %d/%d failed: %s", attempt, self.max_retries, last_error)
+                    except httpx.HTTPStatusError as exc:
+                        status = exc.response.status_code
+                        last_error = LLMError(
+                            f"Lightning AI returned {status}: "
+                            f"{exc.response.text[:500]}"
+                        )
+                        logger.warning("LLM attempt %d/%d failed: %s", attempt, self.max_retries, last_error)
 
-                if attempt < self.max_retries:
-                    # For 429, prefer Retry-After when present.
-                    retry_after = _parse_retry_after_seconds(exc.response) if status == 429 else None
-                    base_wait = self.backoff * (2 ** (attempt - 1))
-                    wait = max(base_wait, retry_after or 0.0)
-                    # Small jitter to avoid thundering herd.
-                    wait = wait + random.uniform(0.0, 0.5)
-                    logger.info("Retrying in %.1fs…", wait)
-                    await asyncio.sleep(wait)
-                    continue
-            except httpx.TimeoutException:
-                last_error = LLMError(f"LLM request timed out after {self.timeout}s")
-                logger.warning("LLM attempt %d/%d timed out", attempt, self.max_retries)
-            except Exception as exc:
-                last_error = LLMError(f"LLM communication error: {exc}")
-                logger.warning("LLM attempt %d/%d error: %s", attempt, self.max_retries, exc)
+                        if attempt < self.max_retries:
+                            # For 429, prefer Retry-After when present.
+                            retry_after = _parse_retry_after_seconds(exc.response) if status == 429 else None
+                            base_wait = self.backoff * (2 ** (attempt - 1))
+                            wait = max(base_wait, retry_after or 0.0)
+                            # Small jitter to avoid thundering herd.
+                            wait = wait + random.uniform(0.0, 0.5)
+                            logger.info("Retrying in %.1fs…", wait)
+                            await asyncio.sleep(wait)
+                            continue
+                    except httpx.TimeoutException:
+                        last_error = LLMError(f"LLM request timed out after {self.timeout}s")
+                        logger.warning("LLM attempt %d/%d timed out", attempt, self.max_retries)
+                    except Exception as exc:
+                        last_error = LLMError(f"LLM communication error: {exc}")
+                        logger.warning("LLM attempt %d/%d error: %s", attempt, self.max_retries, exc)
 
-            if attempt < self.max_retries:
-                wait = self.backoff * (2 ** (attempt - 1)) + random.uniform(0.0, 0.5)
-                logger.info("Retrying in %.1fs…", wait)
-                await asyncio.sleep(wait)
+                    if attempt < self.max_retries:
+                        wait = self.backoff * (2 ** (attempt - 1)) + random.uniform(0.0, 0.5)
+                        logger.info("Retrying in %.1fs…", wait)
+                        await asyncio.sleep(wait)
+        finally:
+            try:
+                global_sem.release()
+            except Exception:
+                pass
 
         # Log failed conversation
         duration_ms = (time.perf_counter() - t0) * 1000

@@ -1085,6 +1085,17 @@ class DockerBuilder:
                 if re.match(r"(?im)^\s*USER\s+", line):
                     continue
 
+                # nginx:alpine already provides an nginx user/group. Re-creating it is a
+                # common LLM mistake and fails deterministically with "user 'nginx' in use".
+                if re.match(r"(?im)^\s*RUN\s+.*\badduser\b.*\bnginx\b", line):
+                    continue
+                if re.match(r"(?im)^\s*RUN\s+.*\baddgroup\b.*\bnginx\b", line):
+                    continue
+                if re.match(r"(?im)^\s*RUN\s+.*\b(addgroup|groupadd)\b.*\bnodejs\b.*\b(adduser|useradd)\b.*\bnginx\b", line):
+                    continue
+                if re.match(r"(?im)^\s*RUN\s+.*\b(adduser|useradd)\b.*\bnginx\b.*\b(addgroup|groupadd)\b.*\bnodejs\b", line):
+                    continue
+
             hardened_lines.append(line)
 
         # Finalize last stage.
@@ -1723,6 +1734,13 @@ class DockerBuilder:
         current_content = dockerfile_content
         last_error = ""
         all_logs: list[str] = []
+
+        if service_name == "backend":
+            current_content = self._harden_backend_dockerfile(current_content)
+        if service_name == "frontend":
+            current_content = self._inject_frontend_artifact_aliases(current_content)
+        current_content = self._harden_nginx_dockerfile(current_content)
+        (project_path / dockerfile_name).write_text(current_content, encoding="utf-8")
 
         for attempt in range(max_repairs + 1):
             log_collector: list[str] = []

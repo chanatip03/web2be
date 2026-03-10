@@ -1,0 +1,60 @@
+Creating tables...
+2026-03-10 14:59:29,494 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-10 14:59:29,494 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("admins")
+2026-03-10 14:59:29,494 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 14:59:29,495 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("role_users")
+2026-03-10 14:59:29,495 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 14:59:29,495 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("users")
+2026-03-10 14:59:29,495 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 14:59:29,495 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("roles")
+2026-03-10 14:59:29,495 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 14:59:29,496 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("students")
+2026-03-10 14:59:29,496 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 14:59:29,496 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("teachers")
+2026-03-10 14:59:29,496 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 14:59:29,496 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("classrooms")
+2026-03-10 14:59:29,496 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 14:59:29,497 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("classroom_members")
+2026-03-10 14:59:29,497 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 14:59:29,497 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("assignments")
+2026-03-10 14:59:29,497 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 14:59:29,497 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("attachments")
+2026-03-10 14:59:29,497 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 14:59:29,498 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("project_types")
+2026-03-10 14:59:29,498 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 14:59:29,498 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("languages")
+2026-03-10 14:59:29,498 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 14:59:29,498 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("projects")
+2026-03-10 14:59:29,498 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 14:59:29,499 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("project_files")
+2026-03-10 14:59:29,499 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 14:59:29,499 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("project_git")
+2026-03-10 14:59:29,499 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 14:59:29,499 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("groups")
+2026-03-10 14:59:29,499 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 14:59:29,500 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("group_members")
+2026-03-10 14:59:29,500 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 14:59:29,500 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("submission_of")
+2026-03-10 14:59:29,500 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-10 14:59:29,500 INFO sqlalchemy.engine.Engine COMMIT
+Done!
+GEN_STATUS 200
+RUN_STATUS 200
+{"test_id": "81038499-10b7-4c8e-bd82-add1cdd049dd", "run_id": "2fda5edb-db63-4551-a46a-5ef9be2659b1", "status": "failed", "total": 3, "passed": 2, "failed": 1, "report_path": "/teamspace/studios/this_studio/merge/web2be/app/deployment/data/projects/b8ef0f32-e3f2-45ff-9a71-2df5edc30472/tests/results/2fda5edb-db63-4551-a46a-5ef9be2659b1/report.html"}
+==============================================================================
+81038499-10B7-4C8E-Bd82-Add1Cdd049Dd :: API tests for GET / and GET /health...
+==============================================================================
+Test GET Root Endpoint Returns Success :: Verify that GET / endpoi... | PASS |
+------------------------------------------------------------------------------
+Test GET Health Endpoint Returns Success :: Verify that GET /healt... | PASS |
+------------------------------------------------------------------------------
+Test GET Health Endpoint Returns Expected Content :: Verify that G... | FAIL |
+healthy != ok
+------------------------------------------------------------------------------
+81038499-10B7-4C8E-Bd82-Add1Cdd049Dd :: API tests for GET / and GE... | FAIL |
+3 tests, 2 passed, 1 failed
+==============================================================================
+Output:  /teamspace/studios/this_studio/merge/web2be/app/deployment/data/projects/b8ef0f32-e3f2-45ff-9a71-2df5edc30472/tests/results/2fda5edb-db63-4551-a46a-5ef9be2659b1/output.xml
+Log:     /teamspace/studios/this_studio/merge/web2be/app/deployment/data/projects/b8ef0f32-e3f2-45ff-9a71-2df5edc30472/tests/results/2fda5edb-db63-4551-a46a-5ef9be2659b1/log.html
+Report:  /teamspace/studios/this_studio/merge/web2be/app/deployment/data/projects/b8ef0f32-e3f2-45ff-9a71-2df5edc30472/tests/results/2fda5edb-db63-4551-a46a-5ef9be2659b1/report.html
+

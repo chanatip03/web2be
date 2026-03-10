@@ -127,6 +127,8 @@ Response จะได้:
 หมายเหตุ:
 - `preview_url` ใส่ก็ได้ไม่ใส่ก็ได้
 - ถ้าไม่ใส่ ระบบจะพยายามหาให้จาก deployment_store
+- ถ้า suite ที่ generate มี `http://localhost:3000` ระบบจะ replace ให้เป็น `preview_url` ที่ resolve ได้ก่อนรัน
+- ถ้าเป็น fullstack และต้องยิง backend API โดยตรง อาจต้องใช้ URL แบบ `/preview/{project_id}/backend/...` หรือแก้ suite ให้ชี้ path ที่ถูกต้อง
 
 ## 4.5 ตรวจผลการรัน
 
@@ -138,7 +140,7 @@ Response จะได้:
 ## 5. Postman Workflow
 
 ตั้งค่า Environment:
-- `baseUrl` = `http://127.0.0.1:8000`
+- `baseUrl` = `http://127.0.0.1:8000` หรือ public URL เช่น ngrok (`https://<your-ngrok>.ngrok-free.app`)
 - `projectId` = project ที่ deploy แล้ว
 - `testId` = ว่าง
 - `runId` = ว่าง
@@ -217,6 +219,7 @@ pm.environment.set("runId", data.run_id);
 - Run โดยส่ง `preview_url` ตรง ๆ
 - กรณี project ไม่มี preview แล้วควรได้ error ที่อ่านง่าย
 - ตรวจผล run ว่ามี pass/fail/log ครบ
+- กรณี generate suite สำเร็จแต่ assertion หรือ path ยังไม่ตรงระบบจริง ควรแก้ suite แล้ว rerun
 
 ## 8. Troubleshooting
 
@@ -230,3 +233,8 @@ pm.environment.set("runId", data.run_id);
 - Robot run fail เพราะ endpoint ไม่ตรง
   - แก้ suite ด้วย `PUT /api/tests/definitions/{test_id}/suite`
   - ใส่ URL/path ให้ตรงกับ preview จริง
+
+- Generate สำเร็จ แต่ run fail ทั้งที่ preview ใช้งานได้
+  - ตรวจว่า suite ใช้ path ถูกกับ mode ที่ deploy หรือไม่
+  - ถ้าเป็น backend-only/fullstack API ให้ลองชี้ผ่าน `/preview/{project_id}/backend/...`
+  - ระบบ generate จาก prompt ได้ แต่ไม่ได้รับประกันว่า assertion ทุกอันจะตรง domain ของโปรเจกต์โดยไม่ต้องแก้

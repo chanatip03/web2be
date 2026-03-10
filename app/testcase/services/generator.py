@@ -17,6 +17,44 @@ from app.deployment.services.logger import LoggerManager
 
 logger = logging.getLogger(__name__)
 
+
+_COLLECTIONS_KEYWORDS = (
+    "Dictionary Should Contain Key",
+    "Dictionary Should Contain Value",
+    "Dictionaries Should Be Equal",
+    "Get From Dictionary",
+    "Set To Dictionary",
+    "Remove From Dictionary",
+)
+
+
+def _normalize_robot_suite_content(suite_content: str) -> str:
+    """Patch common LLM omissions so generated suites stay runnable."""
+    if not suite_content:
+        return suite_content
+
+    needs_collections = any(keyword in suite_content for keyword in _COLLECTIONS_KEYWORDS)
+    has_collections = "Library          Collections" in suite_content or "Library    Collections" in suite_content
+
+    if needs_collections and not has_collections:
+        settings_marker = "*** Settings ***"
+        variables_marker = "*** Variables ***"
+        if settings_marker in suite_content:
+            if variables_marker in suite_content:
+                suite_content = suite_content.replace(
+                    variables_marker,
+                    "Library          Collections\n\n*** Variables ***",
+                    1,
+                )
+            else:
+                suite_content = suite_content.replace(
+                    settings_marker,
+                    "*** Settings ***\nLibrary          Collections",
+                    1,
+                )
+
+    return suite_content
+
 # ── Prompt template ──────────────────────────────────────────────
 
 TEST_GEN_SYSTEM = """\
@@ -137,7 +175,7 @@ async def generate_robot_suite(
 
     try:
         raw = await llm_client.generate(TEST_GEN_SYSTEM, user_msg)
-        suite_content = extract_text_content(raw)
+        suite_content = _normalize_robot_suite_content(extract_text_content(raw))
         proj_logger.log_llm_response("robot_suite", suite_content, success=True)
 
         # Save to project directory
@@ -176,7 +214,7 @@ async def generate_robot_suite_content(
 
     try:
         raw = await llm_client.generate(TEST_GEN_SYSTEM, user_msg)
-        suite_content = extract_text_content(raw)
+        suite_content = _normalize_robot_suite_content(extract_text_content(raw))
         proj_logger.log_llm_response("robot_suite", suite_content, success=True)
         logger.info("Generated test suite content for %s (%d chars)", context_id, len(suite_content))
         return suite_content
