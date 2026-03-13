@@ -126,7 +126,7 @@ RESULTS_DIR=./data/results
 
 วิธีรัน
 ```
-cd /teamspace/studios/this_studio/merge/web2be
+cd /web2be
 pip install -r requirement.txt
 export DATABASE_URL='sqlite:///./runtime_server.db'
 /home/zeus/miniconda3/bin/conda run -p /home/zeus/miniconda3 --no-capture-output python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
