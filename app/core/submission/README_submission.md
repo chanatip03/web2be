@@ -241,7 +241,83 @@ background pipeline ปัจจุบันเรียงลำดับแบ
 - ถ้าจะทดสอบผ่าน ngrok ให้ `PUBLIC_BASE_URL` ชี้ไปที่ URL ของ tunnel ปัจจุบัน
 - ถ้าจะให้ cyber scan ทำงานจริง ต้องมี `SNYK_TOKEN` และต้องติดตั้ง `snyk` CLI ไว้ใน `PATH`
 
-### 2. Login เพื่อรับ `access_token`
+### 2. Register ผู้ใช้ใหม่ ถ้ายังไม่มีบัญชี
+
+ระบบนี้ไม่ได้มี `POST /api/auth/register` ตรง ๆ แต่ใช้ flow สองขั้น:
+
+1. ขอ OTP ผ่าน `POST /api/auth/request-otp`
+2. ยืนยัน OTP ผ่าน `POST /api/auth/verify-otp`
+
+#### 2.1 ขอ OTP สำหรับ student
+
+- Method: `POST`
+- URL: `http://127.0.0.1:8000/api/auth/request-otp`
+- Headers:
+  - `ngrok-skip-browser-warning: true` ถ้าเรียกผ่าน ngrok
+- Body:
+  - เลือก `form-data`
+  - `role` = `student`
+  - `first_name` = ชื่อ
+  - `last_name` = นามสกุล
+  - `email` = อีเมลผู้ใช้ใหม่
+  - `password` = รหัสผ่าน
+  - `academy` = ชื่อสถาบัน
+  - `student_id` = รหัสนักศึกษา
+
+ตัวอย่าง field สำหรับ Postman:
+
+```text
+role = student
+first_name = Demo
+last_name = Student
+email = demo-student@example.com
+password = Passw0rd!123
+academy = Test Academy
+student_id = 65000001
+```
+
+#### 2.2 ขอ OTP สำหรับ teacher
+
+- Method: `POST`
+- URL: `http://127.0.0.1:8000/api/auth/request-otp`
+- Body:
+  - เลือก `form-data`
+  - `role` = `teacher`
+  - `first_name`
+  - `last_name`
+  - `email`
+  - `password`
+  - `academy`
+  - `certificate` = File
+
+หมายเหตุ:
+
+- ถ้าเป็น `teacher` ต้องแนบ `certificate`
+- ถ้าเป็น `student` ไม่ต้องแนบ certificate แต่ควรส่ง `student_id`
+- backend จะส่ง OTP ไปยังอีเมลที่ระบุ ดังนั้น SMTP ต้องใช้งานได้
+
+#### 2.3 ยืนยัน OTP เพื่อสร้างบัญชี
+
+- Method: `POST`
+- URL: `http://127.0.0.1:8000/api/auth/verify-otp`
+- Headers:
+  - `Content-Type: application/json`
+- Body:
+  - เลือก `raw`
+  - เลือกชนิด `JSON`
+
+ตัวอย่าง body:
+
+```json
+{
+  "email": "demo-student@example.com",
+  "otp": "123456"
+}
+```
+
+ถ้า verify สำเร็จ บัญชีจะถูกสร้างในระบบ แล้วจึงค่อยไป login ในขั้นถัดไป
+
+### 3. Login เพื่อรับ `access_token`
 
 submission endpoint ใช้ cookie auth ดังนั้นใน Postman ต้อง login ก่อน
 
@@ -274,7 +350,7 @@ request สำหรับ login ของระบบนี้คือ:
 
 ถ้า Postman ไม่เก็บ cookie ให้อัตโนมัติ ให้เปิด cookie manager แล้วเพิ่ม `access_token` เองให้ตรงกับ domain ที่จะยิง
 
-### 3. สร้าง request สำหรับส่งงานจาก repo
+### 4. สร้าง request สำหรับส่งงานจาก repo
 
 ตัวอย่างสำหรับ `POST /api/submission/{assignment_id}`
 
@@ -297,7 +373,7 @@ request สำหรับ login ของระบบนี้คือ:
 
 เมื่อสำเร็จ response จะเป็นลักษณะ accepted หรือ queued และจะได้ `submission_id` กลับมา
 
-### 4. สร้าง request สำหรับส่งงานจาก zip
+### 5. สร้าง request สำหรับส่งงานจาก zip
 
 ตั้งค่าใน Postman แบบนี้:
 
@@ -316,7 +392,7 @@ request สำหรับ login ของระบบนี้คือ:
 - ส่ง `file` หรือ `repo_url` อย่างใดอย่างหนึ่งเท่านั้น
 - ถ้าจะส่ง `env` ก็ใส่เพิ่มเป็น Text field ใน `form-data`
 
-### 5. Poll สถานะของ submission
+### 6. Poll สถานะของ submission
 
 หลังจากได้ `submission_id` แล้ว ให้สร้าง request ใหม่:
 
@@ -338,7 +414,7 @@ field สำคัญที่ควรดูใน response:
 - cyber scan ทำงาน
 - testcase ถูก mark เป็น skipped
 
-### 6. ดูรายการ artifact
+### 7. ดูรายการ artifact
 
 สร้าง request:
 
@@ -347,7 +423,7 @@ field สำคัญที่ควรดูใน response:
 
 response จะบอกว่า submission นี้มี artifact อะไรบ้าง เช่น scan result, deployment bundle, log หรือไฟล์ผลลัพธ์อื่น ๆ
 
-### 7. ดาวน์โหลด artifact
+### 8. ดาวน์โหลด artifact
 
 เมื่อได้ `artifact_id` จากขั้นก่อนหน้า ให้สร้าง request:
 
@@ -356,7 +432,7 @@ response จะบอกว่า submission นี้มี artifact อะไ�
 
 ใน Postman ให้กด `Send and Download` ถ้าต้องการบันทึกไฟล์ลงเครื่องโดยตรง
 
-### 8. ทดสอบผ่าน ngrok
+### 9. ทดสอบผ่าน ngrok
 
 ถ้าจะทดสอบจาก URL ภายนอก เช่น:
 
@@ -373,10 +449,11 @@ response จะบอกว่า submission นี้มี artifact อะไ�
 ถ้าจะจัดเป็น collection สำหรับทดสอบ แนะนำลำดับนี้:
 
 1. Login
-2. Submit from Repo หรือ Submit from Zip
-3. Get Submission Status
-4. List Submission Artifacts
-5. Download Selected Artifact
+2. Register ถ้ายังไม่มีบัญชี
+3. Submit from Repo หรือ Submit from Zip
+4. Get Submission Status
+5. List Submission Artifacts
+6. Download Selected Artifact
 
 ตัวแปรที่ควรเก็บใน Postman environment หรือ collection variables:
 

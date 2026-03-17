@@ -12,6 +12,7 @@ Supports:
 from __future__ import annotations
 
 import asyncio
+import posixpath
 import re
 import logging
 from datetime import datetime
@@ -1220,15 +1221,10 @@ def _rewrite_localhost_api(text: str, *, api_base: str) -> str:
     """Rewrite hardcoded localhost API origins to the preview backend prefix."""
     if not text or not api_base:
         return text
-    # Common patterns in template JS.
+    # Broaden matching beyond the most common dev ports so more imported
+    # projects keep working under preview without source edits.
     text = re.sub(
-        r"(?i)https?://(?:localhost|127\.0\.0\.1):3000",
-        api_base,
-        text,
-    )
-    # Many projects use a backend on 8000 during local dev.
-    text = re.sub(
-        r"(?i)https?://(?:localhost|127\.0\.0\.1):8000",
+        r"(?i)https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d{1,5})?",
         api_base,
         text,
     )
@@ -1257,6 +1253,101 @@ def _rewrite_absolute_asset_paths(text: str, *, asset_base: str) -> str:
         text,
     )
     return text
+
+
+def _rewrite_common_project_asset_refs(text: str, *, prefix: str) -> str:
+    """Rewrite common project-root asset folders to the preview prefix.
+
+    Many imported projects reference shared files using paths like
+    `../../img_place/foo.jpg`, `/uploads/bar.png`, or `./images/x.webp`.
+    When served under `/preview/<id>/...`, converting these to absolute
+    preview-prefixed URLs makes them independent of the current page depth.
+    """
+    if not text or not prefix or not prefix.startswith("/preview/"):
+        return text
+
+    dir_group = r"(img_place|uploads|images|image|img|imgs|media|public|static)"
+
+    text = re.sub(
+        rf'([`"\'])(?:\.\./|\./)*{dir_group}/',
+        lambda m: f"{m.group(1)}{prefix}/{m.group(2)}/",
+        text,
+    )
+    text = re.sub(
+        rf'([`"\'])/{dir_group}/',
+        lambda m: f"{m.group(1)}{prefix}/{m.group(2)}/",
+        text,
+    )
+    text = re.sub(
+        rf'url\(\s*(["\']?)(?:\.\./|\./)*{dir_group}/',
+        lambda m: f"url({m.group(1)}{prefix}/{m.group(2)}/",
+        text,
+    )
+    text = re.sub(
+        rf'url\(\s*(["\']?)/{dir_group}/',
+        lambda m: f"url({m.group(1)}{prefix}/{m.group(2)}/",
+        text,
+    )
+    return text
+
+
+def _normalize_preview_target(target: str, *, prefix: str, current_path: str = "") -> str:
+    raw = (target or "").strip()
+    if not raw:
+        return raw
+
+    quote = ""
+    if len(raw) >= 2 and raw[0] in {'"', "'"} and raw[-1] == raw[0]:
+        quote = raw[0]
+        raw = raw[1:-1].strip()
+
+    lower = raw.lower()
+    if (
+        not raw
+        or raw.startswith("/preview/")
+        or raw.startswith(prefix)
+        or raw.startswith("#")
+        or lower.startswith(("http://", "https://", "data:", "mailto:", "tel:", "javascript:"))
+    ):
+        return target
+
+    if raw.startswith("/"):
+        rewritten = f"{prefix}{raw}"
+    else:
+        base_dir = "/" + posixpath.dirname((current_path or "").lstrip("/"))
+        normalized = posixpath.normpath(posixpath.join(base_dir, raw))
+        rewritten = f"{prefix}/{normalized.lstrip('/')}" if normalized not in {"", ".", "/"} else f"{prefix}/"
+
+    return f"{quote}{rewritten}{quote}" if quote else rewritten
+
+
+def _rewrite_meta_refresh_urls(html: str, *, prefix: str, current_path: str = "") -> str:
+    if not html or not prefix:
+        return html
+
+    meta_pattern = re.compile(
+        r'(?is)(<meta\b[^>]*http-equiv\s*=\s*["\']refresh["\'][^>]*content\s*=\s*["\'])([^"\']*)(["\'][^>]*>)'
+    )
+
+    def repl(match: re.Match[str]) -> str:
+        content_value = match.group(2)
+
+        def repl_url(url_match: re.Match[str]) -> str:
+            return url_match.group(1) + _normalize_preview_target(
+                url_match.group(2),
+                prefix=prefix,
+                current_path=current_path,
+            )
+
+        rewritten = re.sub(
+            r'(?i)(\burl\s*=\s*)([^;]+)',
+            repl_url,
+            content_value,
+            count=1,
+        )
+        return match.group(1) + rewritten + match.group(3)
+
+    return meta_pattern.sub(repl, html)
 
 
 def _rewrite_react_router_basename(js: str, *, prefix: str) -> str:
@@ -1334,6 +1425,106 @@ def _is_probably_static_asset(path: str) -> bool:
     return False
 
 
+def _normalized_filename_token(value: str) -> str:
+    return "".join(ch.lower() for ch in value if ch.isalnum())
+
+
+def _candidate_project_static_roots(project_id: str) -> list[Path]:
+    project_root = Path(settings.projects_dir) / project_id
+    roots: list[Path] = []
+    seen: set[str] = set()
+
+    project = project_store.get(project_id)
+    detected_frontend_path = ""
+    try:
+        detected_frontend_path = str((getattr(getattr(project, "analysis", None), "frontend_info", None) or {}).get("path") or "").strip()
+    except Exception:
+        detected_frontend_path = ""
+
+    candidates = [
+        project_root / detected_frontend_path if detected_frontend_path else None,
+        project_root / "frontend",
+        project_root / "public",
+        (project_root / detected_frontend_path / "public") if detected_frontend_path else None,
+        project_root / "static",
+        project_root / "assets",
+        project_root,
+    ]
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            resolved = str(candidate.resolve())
+        except Exception:
+            continue
+        if resolved in seen or not candidate.exists():
+            continue
+        seen.add(resolved)
+        roots.append(candidate)
+
+    return roots
+
+
+def _resolve_project_static_file(root: Path, relative_path: str) -> Optional[Path]:
+    rel = (relative_path or "").lstrip("/")
+    if not rel or not root.exists():
+        return None
+
+    rel_path = Path(rel)
+    base_resolved = root.resolve()
+    candidate = (root / rel_path).resolve()
+
+    if str(candidate).startswith(str(base_resolved)) and candidate.is_file():
+        return candidate
+
+    parent = (root / rel_path.parent).resolve()
+    if not (parent.is_dir() and str(parent).startswith(str(base_resolved)) and rel_path.name):
+        return None
+
+    target = _normalized_filename_token(rel_path.name)
+    if not target:
+        return None
+
+    matches: list[Path] = []
+    for item in parent.iterdir():
+        if not item.is_file():
+            continue
+        if _normalized_filename_token(item.name) == target:
+            matches.append(item)
+            if len(matches) > 1:
+                break
+    return matches[0] if len(matches) == 1 else None
+
+
+def _serve_project_static_file(project_id: str, relative_path: str) -> Optional[FileResponse]:
+    rel = (relative_path or "").lstrip("/")
+    if not rel:
+        return None
+
+    for root in _candidate_project_static_roots(project_id):
+        try:
+            resolved = _resolve_project_static_file(root, rel)
+        except Exception:
+            resolved = None
+        if resolved is not None:
+            return FileResponse(str(resolved))
+    return None
+
+
+async def _proxy_or_serve_root_project_static(request: Request, relative_path: str):
+    project_id = _infer_project_id_from_request(request) or _infer_project_id_for_frontend_compat(request)
+    if not project_id:
+        return JSONResponse({"detail": f"Missing preview context for /{relative_path}"}, status_code=404)
+
+    static_file = _serve_project_static_file(project_id, relative_path)
+    if static_file is not None:
+        return static_file
+
+    head, _, tail = relative_path.partition("/")
+    return await preview_service_proxy(project_id, head, request, tail)
+
+
 def _backend_path_prefixes(project_id: str) -> set[str]:
     """Return first-segment prefixes for backend endpoints (best-effort)."""
     prefixes: set[str] = set()
@@ -1356,6 +1547,17 @@ async def preview_index(project_id: str, request: Request):
     deployment = _find_deployment(project_id)
     if not deployment:
         return HTMLResponse("<h1>No active deployment</h1><p>Deploy the project first.</p>", 404)
+
+    # Canonicalize to a trailing-slash URL before proxying.
+    # Some static multi-page frontends issue relative redirects like
+    # `home/home.html`; when the browser starts from `/preview/<id>` (no
+    # trailing slash), it resolves them as `/preview/home/home.html` and loses
+    # the project id.
+    canonical_path = f"/preview/{project_id}/"
+    if request.url.path == f"/preview/{project_id}":
+        if request.url.query:
+            return RedirectResponse(url=f"{canonical_path}?{request.url.query}", status_code=307)
+        return RedirectResponse(url=canonical_path, status_code=307)
 
     deploy_mode = (deployment.deploy_mode or "").strip().lower()
 
@@ -1434,8 +1636,80 @@ async def preview_img_place_compat(request: Request, path: str = ""):
             status_code=404,
         )
 
+    static_file = _serve_project_static_file(project_id, f"img_place/{path}" if path else "img_place")
+    if static_file is not None:
+        return static_file
+
     # Delegate to the normal service proxy: treating `img_place/...` as a path
     # under the project's primary service (frontend for fullstack).
+    return await preview_service_proxy(project_id, "img_place", request, path)
+
+
+@router.api_route(
+    "/img_place/{path:path}",
+    methods=["GET", "HEAD", "OPTIONS"],
+)
+@router.api_route(
+    "/images/{path:path}",
+    methods=["GET", "HEAD", "OPTIONS"],
+)
+@router.api_route(
+    "/image/{path:path}",
+    methods=["GET", "HEAD", "OPTIONS"],
+)
+@router.api_route(
+    "/img/{path:path}",
+    methods=["GET", "HEAD", "OPTIONS"],
+)
+@router.api_route(
+    "/imgs/{path:path}",
+    methods=["GET", "HEAD", "OPTIONS"],
+)
+@router.api_route(
+    "/media/{path:path}",
+    methods=["GET", "HEAD", "OPTIONS"],
+)
+@router.api_route(
+    "/static/{path:path}",
+    methods=["GET", "HEAD", "OPTIONS"],
+)
+@router.api_route(
+    "/public/{path:path}",
+    methods=["GET", "HEAD", "OPTIONS"],
+)
+async def preview_root_static_compat(path: str, request: Request):
+    """Compat: serve common project-root asset folders at the public root.
+
+    Imported projects often reference `/images/*`, `/img/*`, `/static/*`, or
+    `/public/*` from the domain root. Under preview, infer the active project
+    and serve those files from disk or proxy them through the frontend.
+    """
+    asset_prefix = request.url.path.lstrip("/").split("/", 1)[0]
+    rel_path = f"{asset_prefix}/{path}" if path else asset_prefix
+    return await _proxy_or_serve_root_project_static(request, rel_path)
+
+
+@router.api_route("/favicon.ico", methods=["GET", "HEAD", "OPTIONS"])
+@router.api_route("/robots.txt", methods=["GET", "HEAD", "OPTIONS"])
+@router.api_route("/manifest.json", methods=["GET", "HEAD", "OPTIONS"])
+@router.api_route("/site.webmanifest", methods=["GET", "HEAD", "OPTIONS"])
+@router.api_route("/sw.js", methods=["GET", "HEAD", "OPTIONS"])
+@router.api_route("/service-worker.js", methods=["GET", "HEAD", "OPTIONS"])
+async def preview_root_singleton_static_compat(request: Request):
+    """Compat: serve common root singleton static files for the active preview."""
+    rel_path = request.url.path.lstrip("/")
+    return await _proxy_or_serve_root_project_static(request, rel_path)
+
+
+@router.api_route(
+    "/preview/{project_id}/img_place/{path:path}",
+    methods=["GET", "HEAD", "OPTIONS"],
+)
+async def preview_project_img_place(project_id: str, path: str, request: Request):
+    """Serve project-root `img_place` assets under the preview prefix."""
+    static_file = _serve_project_static_file(project_id, f"img_place/{path}" if path else "img_place")
+    if static_file is not None:
+        return static_file
     return await preview_service_proxy(project_id, "img_place", request, path)
 
 
@@ -1850,6 +2124,7 @@ async def preview_service_proxy(project_id: str, service: str, request: Request,
     if service in known:
         base = _get_service_url(deployment, service)
         prefix = f"/preview/{project_id}/{service}"
+        requested_rel_path = path
         # Only rewrite for frontend responses.
         if service != "frontend":
             rewrite_api_base = None
@@ -1905,11 +2180,12 @@ async def preview_service_proxy(project_id: str, service: str, request: Request,
                 rewrite_api_base = None
 
         path = full_subpath
+        requested_rel_path = full_subpath
 
     if not base:
         return HTMLResponse("<h1>No port mapping found</h1>", 502)
 
-    return await _proxy_request_to(
+    proxied = await _proxy_request_to(
         project_id,
         base,
         path,
@@ -1918,6 +2194,17 @@ async def preview_service_proxy(project_id: str, service: str, request: Request,
         rewrite_api_base=rewrite_api_base,
         strip_request_origin=strip_request_origin,
     )
+
+    if (
+        request.method.upper() in {"GET", "HEAD", "OPTIONS"}
+        and proxied.status_code == 404
+        and service != "backend"
+    ):
+        static_file = _serve_project_static_file(project_id, requested_rel_path)
+        if static_file is not None:
+            return static_file
+
+    return proxied
 
 
 @router.api_route(
@@ -2020,13 +2307,16 @@ async def _proxy_request_to(
             text = response_body.decode("utf-8", errors="replace")
             if should_rewrite_html:
                 text = _rewrite_html(text, prefix)
+                text = _rewrite_meta_refresh_urls(text, prefix=prefix, current_path=path)
                 text = _inject_preview_history_base(text, prefix=prefix)
+                text = _rewrite_common_project_asset_refs(text, prefix=prefix)
                 did_mutate_body = True
             if rewrite_api_base:
                 text = _rewrite_localhost_api(text, api_base=rewrite_api_base)
                 did_mutate_body = True
             if prefix:
                 text = _rewrite_absolute_asset_paths(text, asset_base=prefix)
+                text = _rewrite_common_project_asset_refs(text, prefix=prefix)
                 did_mutate_body = True
             response_body = text.encode("utf-8")
 
@@ -2040,6 +2330,7 @@ async def _proxy_request_to(
             js = _rewrite_localhost_api(js, api_base=rewrite_api_base)
             if prefix:
                 js = _rewrite_absolute_asset_paths(js, asset_base=prefix)
+                js = _rewrite_common_project_asset_refs(js, prefix=prefix)
             js = _rewrite_react_router_basename(js, prefix=prefix)
             did_mutate_body = True
             response_body = js.encode("utf-8")
@@ -2049,6 +2340,7 @@ async def _proxy_request_to(
         if ("javascript" in content_type or path.lower().endswith(".js")) and response_body and prefix.startswith("/preview/"):
             js2 = response_body.decode("utf-8", errors="replace")
             js2b = _rewrite_react_router_basename(js2, prefix=prefix)
+            js2b = _rewrite_common_project_asset_refs(js2b, prefix=prefix)
             if js2b != js2:
                 response_body = js2b.encode("utf-8")
                 did_mutate_body = True
