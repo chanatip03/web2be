@@ -9,6 +9,7 @@ from app.core.classroom.controller import router as classroom_router
 from app.core.classroommember.controller import router as classroommember_router
 from app.core.assignment.controller import router as assignment_router
 from app.core.scorebook.controller import router as scorebook_router
+from app.core.feedback.controller import router as feedback_router
 
 api_router = APIRouter()
 api_router.include_router(auth_router)
@@ -21,3 +22,4 @@ api_router.include_router(classroom_router)
 api_router.include_router(classroommember_router)
 api_router.include_router(assignment_router)
 api_router.include_router(scorebook_router)
+api_router.include_router(feedback_router)
