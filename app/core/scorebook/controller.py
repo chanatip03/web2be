@@ -45,17 +45,7 @@ def upsert_scorebook_endpoint(
     db: Session = Depends(get_db),
     # current_user: User = Depends(get_current_user)  # TODO: เพิ่ม auth
 ):
-    """
-    บันทึก score และ feedback ของ project นี้ (กด Submit บนหน้า Scorebook and Feedback)
-
-    Args:
-        - project_id: ID ของ project ที่ต้องการให้คะแนน
-        - score: คะแนน (optional)
-        - feedback: ความคิดเห็น (optional)
-
-    Returns:
-        - ข้อมูล scorebook ที่อัปเดตแล้ว
-    """
+   
     # TODO: ใช้ current_user.id แทน user_id_mock
     user_id_mock = 1
 
