@@ -154,6 +154,8 @@ class ClassroomMember(Base):
     student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
 
     created_date = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_date = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    deleted_date = Column(DateTime(timezone=True), nullable=True)
 
     classroom = relationship("Classroom", back_populates="members")
     student = relationship("Student", back_populates="classrooms")
@@ -192,7 +194,7 @@ class Assignment(Base):
     attachments = relationship("Attachment", back_populates="assignment", cascade="all, delete-orphan")
     project_type = relationship("ProjectType", back_populates="assignments")
     language = relationship("Language", back_populates="assignments")
-    projects = relationship("Project", back_populates="assignment", cascade="all, delete-orphan")
+    groups = relationship("Group", back_populates="assignment", cascade="all, delete-orphan")
 
 class Attachment(Base):
     __tablename__ = "attachments"
@@ -229,7 +231,7 @@ class Project(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
-    assignment_id = Column(Integer, ForeignKey("assignments.id", ondelete="CASCADE"), nullable=False)
+    group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
 
     submission_type = Column(Enum(SubmissionTypeEnum, name="submission_type_enum"), nullable=False)
     env = Column(String, nullable=False)
@@ -242,11 +244,10 @@ class Project(Base):
     created_date = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_date = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     deleted_date = Column(DateTime(timezone=True), nullable=True)
-
-    assignment = relationship("Assignment", back_populates="projects")
+    
     project_files = relationship("ProjectFile", back_populates="project", cascade="all, delete-orphan")
     project_git = relationship("ProjectGit", back_populates="project", uselist=False, cascade="all, delete-orphan")
-    groups = relationship("Group", back_populates="project", cascade="all, delete-orphan")
+    group = relationship("Group", back_populates="projects")
     submission_of = relationship("SubmissionOf",back_populates="project",cascade="all, delete-orphan")
 
 class ProjectFile(Base):
@@ -283,7 +284,7 @@ class Group(Base):
     __tablename__ = "groups"
 
     id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    assignment_id = Column(Integer, ForeignKey("assignments.id", ondelete="CASCADE"), nullable=False)
 
     name = Column(String(50), nullable=False)
 
@@ -291,8 +292,9 @@ class Group(Base):
     updated_date = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     deleted_date = Column(DateTime(timezone=True), nullable=True)
 
-    project = relationship("Project", back_populates="groups")
+    assignment = relationship("Assignment", back_populates="groups")
     members = relationship("GroupMember", back_populates="group", cascade="all, delete-orphan")
+    projects = relationship("Project", back_populates="group", cascade="all, delete-orphan")
 
 class GroupMember(Base):
     __tablename__ = "group_members"

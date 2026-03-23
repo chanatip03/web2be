@@ -1,12 +1,13 @@
 from sqlalchemy.orm import Session
-from app.core.student.repository import get_student_by_user_id
-from app.core.teacher.repository import get_teacher_by_user_id
+from app.core.user.repository import get_student_by_user_id
+from app.core.user.repository import get_teacher_by_user_id
 from app.models.schema import ClassroomMember
 from .repository import (
     add_student_to_classroom,
     get_classroon_member,
     is_student_in_classroom,
-    delete_classroom_member
+    delete_classroom_member,
+    get_classrooms_by_code
 )
 
 from app.core.classroom.repository import (
@@ -14,23 +15,21 @@ from app.core.classroom.repository import (
     is_classroom_of_teacher,
     )
 
-def join_classroom_by_code(db: Session, user_id: int, classroom_id: int, code: str):
+def join_classroom_by_code(db: Session, user_id: int, code: str):
 
     student = get_student_by_user_id(db, user_id)
     if not student:
         raise ValueError("User is not a student")
-    if is_student_in_classroom(db, classroom_id, student.id):
+
+    classroom = get_classrooms_by_code(db, code)
+    if not classroom:
+        raise ValueError("Incorrect classroom code")
+
+    if is_student_in_classroom(db, classroom.id, student.id):
         raise ValueError("Already joined this classroom")
 
-    classroom = get_classroom_by_id(db, classroom_id)
-    if not classroom:
-        raise ValueError("Classroom not found")
-
-    if classroom.code != code:
-        raise ValueError("Incorrect classroom code")
-    
     member = ClassroomMember(
-        classroom_id=classroom_id,
+        classroom_id=classroom.id,
         student_id=student.id
     )
 

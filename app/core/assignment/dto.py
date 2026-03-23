@@ -32,12 +32,12 @@ class Attachment(BaseModel):
 
 class CreateAssignmentRequest(BaseModel):
     title:str
-    description: Optional[str]
+    description: Optional[str] = ""
     start_date: datetime
     due_date: datetime
     is_group: bool
     project_type_id: int
-    language_id: Optional[int]
+    language_id: Optional[int] = 0
     classroom_id: int
 
     @classmethod
