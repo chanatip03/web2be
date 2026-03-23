@@ -3,7 +3,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException
 
-from app.core.teacher.repository import get_teacher_by_user_id
+from app.core.user.repository import get_teacher_by_user_id
 from app.models.schema import Assignment, Attachment
 from app.utils.r2 import delete_file
 from .dto import CreateAssignmentRequest, UpdateAssignmentRequest

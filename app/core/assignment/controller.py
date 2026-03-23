@@ -1,4 +1,4 @@
-from typing import List
+from typing import Annotated, Dict, List
 
 from fastapi import APIRouter, Depends, File, HTTPException, status, UploadFile
 from sqlalchemy.orm import Session
@@ -23,11 +23,11 @@ router = APIRouter(prefix="/assignment", tags=["Assignment"])
 
 @router.post("/", response_model=AssignmentResponse)
 async def create_assignment(
-    data: CreateAssignmentRequest = Depends(CreateAssignmentRequest.as_form),
-    testcase: UploadFile = File(None),
-    attachment: List[UploadFile] = File([]),
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_user),
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[Dict, Depends(get_current_user)],
+    data: Annotated[CreateAssignmentRequest, Depends(CreateAssignmentRequest.as_form)],
+    testcase: Annotated[UploadFile | None, File()] = None,
+    attachment: Annotated[List[UploadFile] | None, File()] = None,
     ):
     try:
         if testcase:
@@ -68,7 +68,7 @@ async def create_assignment(
 @router.get("/", response_model=List[AssignmentResponse])
 def get_assignments(
     classroom_id: int,
-    db: Session = Depends(get_db),
+     db: Annotated[Session, Depends(get_db)],
 ):
     try:
         assignments = get_assignments_service(db, classroom_id)
@@ -82,7 +82,7 @@ def get_assignments(
 @router.get("/{assignment_id}", response_model=AssignmentResponse)
 def get_assignment_by_id(
     assignment_id: int,
-    db: Session = Depends(get_db),
+     db: Annotated[Session, Depends(get_db)],
 ):
     try:
         assignment = get_assignment_by_id_service(db, assignment_id)
@@ -95,12 +95,12 @@ def get_assignment_by_id(
 
 @router.put("/{assignment_id}", response_model=AssignmentResponse)
 async def update_assignment(
-    assignment_id: int,
-    data: UpdateAssignmentRequest = Depends(UpdateAssignmentRequest.as_form),
-    testcase: UploadFile = File(None),
-    attachment: List[UploadFile] = File([]),
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_user),
+    assignment_id: int, 
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[Dict, Depends(get_current_user)],
+    data: Annotated[UpdateAssignmentRequest, Depends(UpdateAssignmentRequest.as_form)],
+    testcase: Annotated[UploadFile | None, File()] = None,
+    attachment: Annotated[List[UploadFile], File()] = [], 
     ):
     try:
         testcase_url = None
@@ -142,8 +142,8 @@ async def update_assignment(
 @router.delete("/{assignment_id}", response_model=AssignmentResponse)
 def delete_assignment(
     assignment_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[Dict, Depends(get_current_user)],
 ):
     try:
         assignment = delete_assignment_service(db, current_user, assignment_id)
@@ -152,3 +152,6 @@ def delete_assignment(
         raise
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    
+# @router.get("/project_types")
+# def get_project_types():
