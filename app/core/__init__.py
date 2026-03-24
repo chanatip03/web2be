@@ -8,6 +8,7 @@ from app.core.classroommember.controller import router as classroommember_router
 from app.core.assignment.controller import router as assignment_router
 from app.core.submission.controller import router as submission_router
 from app.core.group.controller import router as group_router
+from app.core.generatetestcase.controller import router as testcase_router
 
 api_router = APIRouter()
 
@@ -20,3 +21,4 @@ api_router.include_router(classroommember_router)
 api_router.include_router(assignment_router)
 api_router.include_router(submission_router)
 api_router.include_router(group_router)
+api_router.include_router(testcase_router)

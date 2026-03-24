@@ -231,7 +231,7 @@ class Project(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
-    group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
+    group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=True)
 
     submission_type = Column(Enum(SubmissionTypeEnum, name="submission_type_enum"), nullable=False)
     env = Column(String, nullable=False)

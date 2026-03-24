@@ -9,7 +9,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.db.database import engine, Base
 import app.models
 from app.deployment import router as deployment_router
-from app.testcase import router as testcase_router
 
 app = FastAPI(title="WEB2 API",redirect_slashes=False)
 
@@ -29,7 +28,6 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix="/api")
-app.include_router(testcase_router)
 app.include_router(deployment_router)
 
 @app.get("/")

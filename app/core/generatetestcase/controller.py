@@ -11,17 +11,17 @@ from typing import Optional
 import httpx
 
 from app.deployment.core.config import settings
-from app.testcase.models.testcase import TestDefinition
+from .models.testcase import TestDefinition
 from app.deployment.services.deployer.pipeline import project_store, deployment_store
-from app.testcase.services.generator import generate_test_cases, generate_robot_suite_content
-from app.testcase.services.runner import (
+from .services.generator import generate_test_cases, generate_robot_suite_content
+from .services.runner import (
     run_robot_tests_with_suite_content,
     get_test_result,
     list_test_results_by_definition,
 )
 from app.deployment.store.json_store import JsonStore
 
-router = APIRouter(prefix="/api/tests", tags=["Testing"])
+router = APIRouter(prefix="/testcase", tags=["generate Testcase"])
 
 test_definition_store: JsonStore[TestDefinition] = JsonStore(
     str(Path(settings.data_dir) / "tests"),
