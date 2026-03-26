@@ -1,10 +1,20 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.db.database import get_db
-from .dto import FeedbackResponse
-from .service import get_feedback_detail
+from .dto import FeedbackResponse, FeedbackNotifyRequest, FeedbackNotifyResponse
+from .service import get_feedback_detail, send_feedback_notification_service
 
 router = APIRouter(prefix="/feedback", tags=["Feedback"])
+
+
+@router.post("/notify", response_model=FeedbackNotifyResponse)
+def notify_feedback(payload: FeedbackNotifyRequest):
+    result = send_feedback_notification_service(
+        email=payload.email,
+        discord_user_id=payload.discord_user_id,
+        feedback_text=payload.feedback_text,
+    )
+    return FeedbackNotifyResponse(**result)
 
 
 @router.get("/{project_id}", response_model=FeedbackResponse)

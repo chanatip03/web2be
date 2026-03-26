@@ -12,8 +12,11 @@ import app.models
 app = FastAPI(title="WEB2 API")
 
 print("Creating tables...")
-Base.metadata.create_all(bind=engine)
-print("Done!")
+try:
+    Base.metadata.create_all(bind=engine)
+    print("Done!")
+except Exception as e:
+    print(f"Warning: Could not create tables ({e}). DB may be unavailable.")
 
 origins = [
     "http://localhost:3000",

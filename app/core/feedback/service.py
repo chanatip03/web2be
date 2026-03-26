@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session
 from app.models.schema import Student
+from app.utils.notification import send_feedback_email, send_feedback_discord_dm
 from .repository import get_project_by_id, get_submission_of_by_project
 
 
@@ -25,4 +26,16 @@ def get_feedback_detail(db: Session, project_id: int, user_id: int) -> dict:
         "project_id": project.id,
         "score": project.score,
         "feedback": project.feedback,
+    }
+
+
+def send_feedback_notification_service(email: str, discord_user_id: str, feedback_text: str) -> dict:
+    email_result = send_feedback_email(email, feedback_text)
+    discord_result = send_feedback_discord_dm(discord_user_id, feedback_text)
+
+    return {
+        "email_sent": email_result["success"],
+        "discord_sent": discord_result["success"],
+        "email_error": email_result.get("error"),
+        "discord_error": discord_result.get("error"),
     }
