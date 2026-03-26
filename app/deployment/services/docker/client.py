@@ -56,25 +56,43 @@ class DockerClient:
 
         If *log_collector* is passed, each build-log line is appended to it.
         """
+        import subprocess
+
         logger.info("Building image %s from %s", tag, path)
         try:
-            image, build_logs = self.client.images.build(
-                path=path,
-                tag=tag,
-                dockerfile=dockerfile,
-                rm=True,
-                forcerm=True,
+            cmd = ["docker", "build", "-f", dockerfile, "-t", tag, "."]
+            result = subprocess.run(
+                cmd,
+                cwd=path,
+                capture_output=True,
+                text=True,
+                timeout=1200,
+                encoding="utf-8",
+                errors="replace",
             )
-            # Collect logs
-            for chunk in build_logs:
-                if "stream" in chunk:
-                    line = chunk["stream"].strip()
-                    if line:
-                        logger.debug("  %s", line)
-                        if log_collector is not None:
-                            log_collector.append(line)
-            logger.info("Image built: %s (%s)", tag, image.id[:12])
-            return image.id
+
+            build_output = "\n".join(part for part in [result.stdout, result.stderr] if part)
+            if log_collector is not None and build_output:
+                for line in build_output.splitlines():
+                    if line.strip():
+                        log_collector.append(line)
+
+            if result.returncode != 0:
+                raise DockerError(f"Docker build failed ({result.returncode}):\n{build_output}")
+
+            inspect = subprocess.run(
+                ["docker", "image", "inspect", tag, "--format", "{{.Id}}"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                encoding="utf-8",
+                errors="replace",
+            )
+            image_id = (inspect.stdout or "").strip()
+            if not image_id:
+                image_id = f"image:{tag}"
+            logger.info("Image built: %s (%s)", tag, image_id[:24])
+            return image_id
         except BuildError as exc:
             logs = "\n".join(
                 chunk.get("stream", chunk.get("error", ""))
@@ -84,6 +102,8 @@ class DockerClient:
             if log_collector is not None:
                 log_collector.append(f"BUILD ERROR:\n{logs}")
             raise DockerError(f"Docker build failed: {exc}\n{logs}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise DockerError(f"Docker build timed out: {exc}") from exc
         except Exception as exc:
             raise DockerError(f"Docker build error: {exc}") from exc
 
@@ -248,14 +268,27 @@ class DockerClient:
     def save_image(self, image_tag: str, output_path: str) -> None:
         """Save a Docker image as a compressed .tar.gz archive."""
         import gzip
+        import subprocess
 
         try:
-            image = self.client.images.get(image_tag)
-            raw_tar = image.save(named=True)
+            proc = subprocess.Popen(
+                ["docker", "image", "save", image_tag],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
 
+            assert proc.stdout is not None
             with gzip.open(output_path, "wb", compresslevel=6) as gz:
-                for chunk in raw_tar:
-                    gz.write(chunk)
+                for chunk in iter(lambda: proc.stdout.read(1024 * 1024), b""):
+                    if chunk:
+                        gz.write(chunk)
+
+            stderr = ""
+            if proc.stderr is not None:
+                stderr = proc.stderr.read().decode("utf-8", errors="replace")
+            code = proc.wait(timeout=300)
+            if code != 0:
+                raise DockerError(f"docker image save failed ({code}): {stderr}")
 
             logger.info("Image saved: %s → %s", image_tag, output_path)
         except Exception as exc:
