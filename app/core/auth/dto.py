@@ -1,6 +1,7 @@
-from typing import List, Optional
-from fastapi import Form
-from pydantic import BaseModel, ConfigDict, EmailStr
+from datetime import datetime
+from typing import Optional
+from fastapi import Form, UploadFile
+from pydantic import BaseModel, EmailStr , field_validator
 
 class Token(BaseModel):
     access_token: str
@@ -44,46 +45,3 @@ class register_request(BaseModel):
     )
     class Config:
         from_attributes = True
-
-class RoleResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    name: str
-
-
-class UserBaseResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    first_name: str
-    last_name: str
-    email: EmailStr
-    image_url: Optional[str]
-    academy: Optional[str]
-
-
-class StudentInfo(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    student_id: Optional[str]
-    discord_user_id: Optional[str]
-
-
-class TeacherInfo(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    certificate_url: Optional[str]
-    is_approved: bool
-
-
-class MeResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    user: UserBaseResponse
-    roles: List[RoleResponse]
-
-    student: Optional[StudentInfo] = None
-    teacher: Optional[TeacherInfo] = None

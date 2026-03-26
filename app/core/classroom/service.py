@@ -1,6 +1,9 @@
+import csv
+import io
 from sqlalchemy.orm import Session
 from app.core.classroom.dto import ClassroomUpdateDTO, CreateClassroomRequest
-from app.core.user.repository import get_student_by_user_id, get_teacher_by_user_id
+from app.core.student.repository import get_student_by_user_id
+from app.core.teacher.repository import get_teacher_by_user_id
 from app.models.schema import Classroom
 from .repository import (
     create_classroom,
@@ -18,7 +21,7 @@ def generate_classroom_code() -> str:
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
 
-def create_new_classroom(data: CreateClassroomRequest, db: Session, current_user: dict):
+def create_new_classroom(data: CreateClassroomRequest, db: Session, current_user):
     if current_user["role"] != "teacher":
         raise ValueError("Only teachers can create classrooms")
     
@@ -42,7 +45,7 @@ def create_new_classroom(data: CreateClassroomRequest, db: Session, current_user
     return classroom
 
 
-def get_classrooms_service(db: Session, current_user: dict):
+def get_classrooms_service(db: Session, current_user):
 
     if current_user["role"] == "teacher":
         teacher = get_teacher_by_user_id(db, current_user["id"])
@@ -69,7 +72,7 @@ def get_classroom_by_id_service(db: Session, classroom_id: int):
 
     return classroom
 
-def update_classroom_service(db: Session, classroom_id: int,current_user: dict, payload: ClassroomUpdateDTO):
+def update_classroom_service(db: Session, classroom_id: int,current_user, payload: ClassroomUpdateDTO):
     if current_user["role"] != "teacher":
         raise ValueError("Only teachers can update classrooms")
     

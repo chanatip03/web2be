@@ -41,11 +41,13 @@ def send_otp_email(to_email: str, otp: str):
 """
     msg.attach(MIMEText(body, "plain"))
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-        server.ehlo()
-        server.starttls()
-        server.ehlo()
-        server.login(SMTP_USER, SMTP_PASS)
+    with smtplib.SMTP(SMTP_HOST or "localhost", SMTP_PORT) as server:
+        try:
+            server.starttls()
+        except Exception:
+            pass
+        if SMTP_USER and SMTP_PASS:
+            server.login(SMTP_USER, SMTP_PASS)
         server.send_message(msg)
 
 

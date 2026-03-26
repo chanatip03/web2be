@@ -1,15 +1,13 @@
 
-from sqlalchemy.orm import Session, joinedload
-from app.models.schema import Classroom, ClassroomMember
+from datetime import datetime, timezone
+from sqlalchemy.orm import Session
+from app.models.schema import ClassroomMember
 
 def add_student_to_classroom(db: Session, member: ClassroomMember) -> ClassroomMember:
     db.add(member)
     db.commit()
     db.refresh(member)
     return member
-
-def get_classroom_member_by_id(db: Session, member_id: int):
-    return db.query(ClassroomMember).options(joinedload(ClassroomMember.student)).filter(ClassroomMember.id == member_id).first()
 
 def is_student_in_classroom(db: Session, classroom_id: int, student_id: int) -> bool:
     """เช็คว่านักเรียนอยู่ใน classroom แล้วหรือยัง"""
@@ -25,22 +23,15 @@ def get_classroon_member(db: Session, classroom_id: int) -> list[ClassroomMember
         ClassroomMember.deleted_date.is_(None)
     ).all()
     )
-    
-def get_classrooms_by_code(db: Session, code: str):
-    return (
-        db.query(Classroom)
-        .filter(
-           Classroom.code == code,
-           Classroom.deleted_date.is_(None)
-        )
-        .first()
-    )
 
-def delete_classroom_member(db: Session, classroom_id: int, student_id: int):
+def delete_classroom_member(db: Session, classroom_id: int, student_id: int) -> ClassroomMember:
     member = db.query(ClassroomMember).filter(
         ClassroomMember.classroom_id == classroom_id,
         ClassroomMember.student_id == student_id,
+        ClassroomMember.deleted_date.is_(None)
     ).first()
     if member:
-        db.delete(member)
+        member.deleted_date = datetime.now(timezone.utc)
         db.commit()
+        db.refresh(member)
+    return member

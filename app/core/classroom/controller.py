@@ -1,5 +1,3 @@
-from typing import Annotated, Dict
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.db.database import get_db
@@ -21,8 +19,8 @@ router = APIRouter(prefix="/classroom", tags=["Classroom"])
 @router.post("/", response_model=ClassroomResponse)
 def create_classroom_endpoint(
     data: CreateClassroomRequest,
-    db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[dict, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user),
 ):    
     try:
         classroom = create_new_classroom(data ,db ,current_user) 
@@ -40,8 +38,8 @@ def create_classroom_endpoint(
 
 @router.get("/", response_model=list[ClassroomResponse])
 def get_classrooms_endpoint(
-    db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[dict, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user),
 ):
     
     try:
@@ -54,7 +52,7 @@ def get_classrooms_endpoint(
         )
 
 @router.get("/{classroom_id}",response_model=ClassroomResponse)
-def get_classroom_by_id_endpoint(classroom_id: int, db: Annotated[Session, Depends(get_db)]):
+def get_classroom_by_id_endpoint(classroom_id: int, db: Session = Depends(get_db)):
     data = get_classroom_by_id_service(db, classroom_id)
 
     if not data:
@@ -67,8 +65,8 @@ def get_classroom_by_id_endpoint(classroom_id: int, db: Annotated[Session, Depen
 def update_classroom_endpoint(
     classroom_id: int,
     payload: ClassroomUpdateDTO,
-    db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[Dict, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user),
 ):
     classroom = update_classroom_service(db, classroom_id, current_user, payload)
 

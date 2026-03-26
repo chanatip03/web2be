@@ -1,15 +1,14 @@
 from datetime import datetime, timezone
 from typing import Optional
 import uuid
-from fastapi import File, Form, Response, APIRouter, Depends, HTTPException, UploadFile
+from fastapi import File, Form, Request, Response, APIRouter, Depends, HTTPException, UploadFile
+from pydantic import EmailStr
 from sqlalchemy.orm import Session
 from app.db.database import get_db
-from app.models.schema import User
 from app.utils.r2 import upload_file
-from app.utils.validator import get_current_user
-from .dto import LoginRequest, MeResponse, Token, VerifyOtpRequest, register_request
-from .service import authenticate_admin, authenticate_user, get_user_data_service
-from app.utils.generate_token import create_access_token
+from .dto import LoginRequest, Token, VerifyOtpRequest, register_request
+from .service import authenticate_admin, authenticate_user
+from app.utils.generate_token import create_access_token , decode_token
 from app.utils.otp import (
     generate_otp,
     hash_otp,
@@ -18,7 +17,8 @@ from app.utils.otp import (
     get_otp_memory,
     delete_otp_memory,
     )
-from app.core.user.service import create_user_service
+from app.core.student.service import create_student
+from app.core.teacher.service import create_teacher
 
 router = APIRouter(prefix="/auth" , tags=["auth"])
 
@@ -130,28 +130,26 @@ def verify_otp(data: VerifyOtpRequest, db: Session = Depends(get_db)):
 
     try:
         if role == "student":
-            create_user_service(
+            user = create_student(
                 db,
-                role,
                 data["first_name"],
                 data["last_name"],
                 data["email"],
                 data["password"],
                 data.get("academy"),
-                student_id=data.get("student_id"),
+                data.get("student_id"),
             )
 
         elif role == "teacher":
-                create_user_service(
-                    db,
-                    role,
-                    data["first_name"],
-                    data["last_name"],
-                    data["email"],
-                    data["password"],
-                    data["academy"],
-                    data["certificate_url"],
-                )
+            user = create_teacher(
+                db,
+                data["first_name"],
+                data["last_name"],
+                data["email"],
+                data["password"],
+                data["academy"],
+                data["certificate_url"],
+            )
         else:
             raise HTTPException(status_code=400, detail="Invalid role")
 
@@ -163,18 +161,17 @@ def verify_otp(data: VerifyOtpRequest, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/me", response_model=MeResponse)
-async def get_user_data(
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-):
-    user = get_user_data_service(db, current_user["id"])
-    return map_user_to_me_response(user)
+@router.get("/me")
+async def check_user_token(request: Request):
+    token = request.cookies.get("access_token")
+    print(token)
+    if not token:
+        raise HTTPException(status_code=401, detail="No access token")
+    
+    try:
+        payload = decode_token(token)
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
-def map_user_to_me_response(user: User):
-    return {
-        "user": user,
-        "roles": user.roles,
-        "student": user.student,
-        "teacher": user.teacher,
-    }
+

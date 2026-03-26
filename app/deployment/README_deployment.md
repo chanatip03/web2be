@@ -123,16 +123,6 @@ RESULTS_DIR=./data/results
 - ระบบจะเรียก LLM แบบเข้าคิวทีละงาน และจะถือคิวไว้ตลอดช่วง retry/backoff ของงานนั้น เพื่อไม่ให้ deployment หลายตัว interleave request ใส่ provider พร้อมกัน
 - ถ้าเจอ `429 Too Many Requests` จาก Lightning AI deployment จะช้าลงหรือ fail ได้ เพราะระบบมี retry อัตโนมัติแต่ยังขึ้นกับ quota ของ provider
 
-
-วิธีรัน
-```
-cd /web2be
-pip install -r requirement.txt
-export DATABASE_URL='sqlite:///./runtime_server.db'
-/home/zeus/miniconda3/bin/conda run -p /home/zeus/miniconda3 --no-capture-output python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-
 ## 4. วิธีทดสอบการใช้งาน (แนะนำ)
 
 ## 4.1 Smoke test ระบบ

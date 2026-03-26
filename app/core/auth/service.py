@@ -23,8 +23,3 @@ def authenticate_admin(db: Session, email: str, password: str):
         return None
 
     return admin
-
-def get_user_data_service(db: Session, current_user: int):
-    user = repository.get_user_data(db, current_user)
-
-    return user
