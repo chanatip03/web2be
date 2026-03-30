@@ -9,9 +9,9 @@ from app.core.assignment.controller import router as assignment_router
 from app.core.submission.controller import router as submission_router
 from app.core.group.controller import router as group_router
 from app.core.generatetestcase.controller import router as testcase_router
+from app.core.profile.controller import router as profile_router 
 
 api_router = APIRouter()
-
 api_router.include_router(auth_router)
 api_router.include_router(admin_router)
 api_router.include_router(plagiarism_router)
@@ -22,3 +22,4 @@ api_router.include_router(assignment_router)
 api_router.include_router(submission_router)
 api_router.include_router(group_router)
 api_router.include_router(testcase_router)
+api_router.include_router(profile_router)  

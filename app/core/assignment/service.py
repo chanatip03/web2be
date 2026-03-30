@@ -1,6 +1,7 @@
 from typing import List, Optional
 from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException
+from datetime import timezone
 
 from app.core.user.repository import get_teacher_by_user_id
 from app.models.schema import Assignment, Attachment
@@ -41,7 +42,7 @@ def create_assignment_service(
         raise HTTPException(status_code=404, detail="Classroom not found")
     owner = is_classroom_of_teacher(db, data.classroom_id, teacher.id)
     if not owner:
-        raise ValueError("Classroom is not under  your control")
+        raise ValueError("Classroom is not under your control")
     if data.due_date and data.start_date >= data.due_date:
         raise HTTPException(status_code=422, detail="startDate must be before dueDate")
     
@@ -61,12 +62,12 @@ def create_assignment_service(
 
     attachments = [
         Attachment(file_url=url, assignment_id=assignment.id)
-        for url in attachment_urls
+        for url in (attachment_urls or [])
     ]
     
-    create_attachment(db,attachments)
+    create_attachment(db, attachments)
     
-    assignment = get_assignment_by_id(db , assignment.id)
+    assignment = get_assignment_by_id(db, assignment.id)
 
     return assignment
 
@@ -224,6 +225,6 @@ def delete_assignment_service(db: Session, current_user, assignment_id: int):
     if not owner:
         raise ValueError("Not your classroom")
 
-    assignment = soft_delete_assignment(db, assignment, tz)
+    assignment = soft_delete_assignment(db, assignment)
     
     return assignment

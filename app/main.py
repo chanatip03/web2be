@@ -10,6 +10,7 @@ from app.db.database import engine, Base
 import app.models
 from app.deployment import router as deployment_router
 
+
 app = FastAPI(title="WEB2 API",redirect_slashes=False)
 
 print("Creating tables...")
