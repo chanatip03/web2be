@@ -1,17 +1,18 @@
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr
-from fastapi import UploadFile
+
 
 class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     first_name: str
     last_name: str
     email: EmailStr
     image_url: Optional[str] = None
-    academy: str
-    class Config:
-        from_attributes = True
+    academy: Optional[str] = None
+
 
 class CreateStudentRequest(BaseModel):
     first_name: str
@@ -21,21 +22,21 @@ class CreateStudentRequest(BaseModel):
     academy: str
     student_id: str
 
+
 class StudentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
     id: int
-    student_id: str
+    student_id: Optional[str] = None
     discord_user_id: Optional[str] = None
     user: UserResponse
 
+
 class CreateStudentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     email: EmailStr
-    
-    class Config:
-        from_attributes = True
-        
-from fastapi import UploadFile
 
 
 class CreateTeacherRequest(BaseModel):
@@ -44,20 +45,19 @@ class CreateTeacherRequest(BaseModel):
     email: EmailStr
     password: str
     academy: str
-    certificate: UploadFile
+
 
 class TeacherResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    certificate_url: str
+    certificate_url: Optional[str] = None
     is_approved: bool
     user: UserResponse
-    
+
+
 class CreateTeacherResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     email: EmailStr
-    
-    class Config:
-        from_attributes = True
-
