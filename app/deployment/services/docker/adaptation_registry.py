@@ -207,10 +207,45 @@ class FrontendApiBaseRule:
         return changed
 
 
+class FrontendEnvApiReferenceRule:
+    name = "frontend_env_api_reference_preview"
+
+    def supports(self, mode: str) -> bool:
+        return mode in {"frontend-only", "fullstack", "auto"}
+
+    def apply(self, ctx: AdaptationContext, safe_write: Callable[[Path, str], bool]) -> List[str]:
+        changed: List[str] = []
+        frontend_path = str((ctx.analysis.frontend_info or {}).get("path") or "frontend").strip() if ctx.analysis else "frontend"
+        roots = [ctx.project_path / frontend_path, ctx.project_path]
+
+        preview_expr = "(typeof window !== 'undefined' && window.location.pathname.startsWith('/preview/') ? '/preview/' + window.location.pathname.split('/')[2] : '')"
+        vite_expr = f"({preview_expr} || import.meta.env['VITE_API_URL'] || '')"
+        react_expr = f"({preview_expr} || process.env['REACT_APP_API_URL'] || '')"
+
+        for root in roots:
+            if not root.exists() or not root.is_dir():
+                continue
+            for pattern in ("*.ts", "*.tsx", "*.js", "*.jsx"):
+                for file_path in root.rglob(pattern):
+                    if any(part in {"node_modules", "dist", "build", "out"} for part in file_path.parts):
+                        continue
+                    text = file_path.read_text(encoding="utf-8", errors="ignore")
+                    if "import.meta.env.VITE_API_URL" not in text and "process.env.REACT_APP_API_URL" not in text:
+                        continue
+
+                    new_text = text.replace("import.meta.env.VITE_API_URL", vite_expr)
+                    new_text = new_text.replace("process.env.REACT_APP_API_URL", react_expr)
+
+                    if new_text != text and safe_write(file_path, new_text):
+                        changed.append(str(file_path.relative_to(ctx.project_path)))
+        return changed
+
+
 def create_default_registry() -> AdaptationRegistry:
     registry = AdaptationRegistry()
     registry.register(FrontendViteBaseRule())
     registry.register(FrontendBrowserRouterRule())
     registry.register(FrontendApiBaseRule())
+    registry.register(FrontendEnvApiReferenceRule())
     registry.register(NodeMysqlEnvRule())
     return registry

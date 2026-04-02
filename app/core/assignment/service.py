@@ -1,4 +1,5 @@
 from typing import List, Optional
+from datetime import timezone
 from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException
 
@@ -224,6 +225,6 @@ def delete_assignment_service(db: Session, current_user, assignment_id: int):
     if not owner:
         raise ValueError("Not your classroom")
 
-    assignment = soft_delete_assignment(db, assignment, tz)
+    assignment = soft_delete_assignment(db, assignment)
     
     return assignment

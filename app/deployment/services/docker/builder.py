@@ -1054,8 +1054,31 @@ class DockerBuilder:
             removed_missing_nginx_conf = False
             nginx_from_index = None
 
-        for line in lines:
-            from_match = re.match(r"(?im)^\s*FROM\s+([^\s]+)", line)
+        instruction_blocks: list[list[str]] = []
+        index = 0
+        while index < len(lines):
+            block = [lines[index]]
+            while block[-1].rstrip().endswith("\\") and index + 1 < len(lines):
+                index += 1
+                block.append(lines[index])
+            instruction_blocks.append(block)
+            index += 1
+
+        permission_targets = (
+            "/usr/share/nginx/html",
+            "/var/cache/nginx",
+            "/var/log/nginx",
+            "/etc/nginx/conf.d",
+            "/run/nginx.pid",
+            "/run",
+        )
+
+        for block in instruction_blocks:
+            first_line = block[0]
+            flattened_block = re.sub(r"\\\s*\n\s*", " ", "\n".join(block)).strip()
+            lowered_block = flattened_block.lower()
+
+            from_match = re.match(r"(?im)^\s*FROM\s+([^\s]+)", first_line)
             if from_match:
                 # Finalize the previous stage before switching.
                 _maybe_inject_inline_nginx_conf()
@@ -1070,33 +1093,36 @@ class DockerBuilder:
                 # Drop missing nginx.conf copies; we'll replace with a safe inline config.
                 if re.match(
                     r"(?im)^\s*COPY\s+[^\s]*nginx\.conf\s+/etc/nginx/conf\.d/default\.conf\s*$",
-                    line,
+                    flattened_block,
                 ):
                     removed_missing_nginx_conf = True
                     continue
                 if re.match(
                     r"(?im)^\s*COPY\s+[^\s]*nginx\.conf\s+/etc/nginx/nginx\.conf\s*$",
-                    line,
+                    flattened_block,
                 ):
                     removed_missing_nginx_conf = True
                     continue
 
                 # Prefer root for nginx stage for compatibility (bind 80, writable dirs).
-                if re.match(r"(?im)^\s*USER\s+", line):
+                if re.match(r"(?im)^\s*USER\s+", flattened_block):
                     continue
 
                 # nginx:alpine already provides an nginx user/group. Re-creating it is a
                 # common LLM mistake and fails deterministically with "user 'nginx' in use".
-                if re.match(r"(?im)^\s*RUN\s+.*\badduser\b.*\bnginx\b", line):
-                    continue
-                if re.match(r"(?im)^\s*RUN\s+.*\baddgroup\b.*\bnginx\b", line):
-                    continue
-                if re.match(r"(?im)^\s*RUN\s+.*\b(addgroup|groupadd)\b.*\bnodejs\b.*\b(adduser|useradd)\b.*\bnginx\b", line):
-                    continue
-                if re.match(r"(?im)^\s*RUN\s+.*\b(adduser|useradd)\b.*\bnginx\b.*\b(addgroup|groupadd)\b.*\bnodejs\b", line):
-                    continue
+                if re.match(r"(?im)^\s*RUN\b", flattened_block):
+                    if re.search(r"\b(adduser|useradd|addgroup|groupadd)\b", lowered_block):
+                        if "nginx" in lowered_block or "nodejs" in lowered_block:
+                            continue
 
-            hardened_lines.append(line)
+                    # When the nginx runtime stage stays on root, ownership/permission
+                    # rewrites for nginx-specific paths are unnecessary and often break
+                    # because LLMs mix in a non-existent group like `nodejs`.
+                    if re.search(r"\b(chown|chmod)\b", lowered_block):
+                        if any(target in lowered_block for target in permission_targets):
+                            continue
+
+            hardened_lines.extend(block)
 
         # Finalize last stage.
         _maybe_inject_inline_nginx_conf()

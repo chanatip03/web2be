@@ -206,7 +206,7 @@ background pipeline ปัจจุบันเรียงลำดับแบ
 ### ตรวจ assignment และสิทธิ์นักศึกษา
 
 - `app.core.assignment.repository.get_assignment_by_id`
-- `app.core.student.repository.get_student_by_user_id`
+- `app.core.user.repository.get_student_by_user_id`
 - `app.core.classroommember.repository.is_student_in_classroom`
 - `app.utils.validator.get_current_user`
 
@@ -220,7 +220,7 @@ background pipeline ปัจจุบันเรียงลำดับแบ
 
 ### Testcase subsystem
 
-- `app.testcase.services.runner.run_robot_tests_with_suite_content`
+- `app.core.generatetestcase.services.runner.run_robot_tests_with_suite_content`
 
 ### Security scan subsystem
 
@@ -230,245 +230,169 @@ background pipeline ปัจจุบันเรียงลำดับแบ
 
 ## วิธีทดสอบผ่าน Postman
 
-ส่วนนี้ตั้งใจเขียนสำหรับการทดสอบด้วย Postman โดยตรง แทนการใช้ `curl`
+ส่วนนี้เป็น workflow ที่ใช้ยิง submission flow จริงผ่าน API ของระบบ โดยต้องสร้าง `assignment` ก่อนทุกครั้ง เพราะ endpoint ส่งงานอ้าง `assignment_id` โดยตรง
 
-### 1. เตรียม server
+## สิ่งที่ต้องมีล่วงหน้า
 
-ต้องมีเงื่อนไขพื้นฐานดังนี้:
-
-- PostgreSQL ใช้งานได้ตาม `DATABASE_URL`
 - backend รันอยู่ เช่น `http://127.0.0.1:8000`
-- ถ้าจะทดสอบผ่าน ngrok ให้ `PUBLIC_BASE_URL` ชี้ไปที่ URL ของ tunnel ปัจจุบัน
-- ถ้าจะให้ cyber scan ทำงานจริง ต้องมี `SNYK_TOKEN` และต้องติดตั้ง `snyk` CLI ไว้ใน `PATH`
-
-### 2. Register ผู้ใช้ใหม่ ถ้ายังไม่มีบัญชี
-
-ระบบนี้ไม่ได้มี `POST /api/auth/register` ตรง ๆ แต่ใช้ flow สองขั้น:
-
-1. ขอ OTP ผ่าน `POST /api/auth/request-otp`
-2. ยืนยัน OTP ผ่าน `POST /api/auth/verify-otp`
-
-#### 2.1 ขอ OTP สำหรับ student
-
-- Method: `POST`
-- URL: `http://127.0.0.1:8000/api/auth/request-otp`
-- Headers:
-  - `ngrok-skip-browser-warning: true` ถ้าเรียกผ่าน ngrok
-- Body:
-  - เลือก `form-data`
-  - `role` = `student`
-  - `first_name` = ชื่อ
-  - `last_name` = นามสกุล
-  - `email` = อีเมลผู้ใช้ใหม่
-  - `password` = รหัสผ่าน
-  - `academy` = ชื่อสถาบัน
-  - `student_id` = รหัสนักศึกษา
-
-ตัวอย่าง field สำหรับ Postman:
-
-```text
-role = student
-first_name = Demo
-last_name = Student
-email = demo-student@example.com
-password = Passw0rd!123
-academy = Test Academy
-student_id = 65000001
-```
-
-#### 2.2 ขอ OTP สำหรับ teacher
-
-- Method: `POST`
-- URL: `http://127.0.0.1:8000/api/auth/request-otp`
-- Body:
-  - เลือก `form-data`
-  - `role` = `teacher`
-  - `first_name`
-  - `last_name`
-  - `email`
-  - `password`
-  - `academy`
-  - `certificate` = File
-
-หมายเหตุ:
-
-- ถ้าเป็น `teacher` ต้องแนบ `certificate`
-- ถ้าเป็น `student` ไม่ต้องแนบ certificate แต่ควรส่ง `student_id`
-- backend จะส่ง OTP ไปยังอีเมลที่ระบุ ดังนั้น SMTP ต้องใช้งานได้
-
-#### 2.3 ยืนยัน OTP เพื่อสร้างบัญชี
-
-- Method: `POST`
-- URL: `http://127.0.0.1:8000/api/auth/verify-otp`
-- Headers:
-  - `Content-Type: application/json`
-- Body:
-  - เลือก `raw`
-  - เลือกชนิด `JSON`
-
-ตัวอย่าง body:
-
-```json
-{
-  "email": "demo-student@example.com",
-  "otp": "123456"
-}
-```
-
-ถ้า verify สำเร็จ บัญชีจะถูกสร้างในระบบ แล้วจึงค่อยไป login ในขั้นถัดไป
-
-### 3. Login เพื่อรับ `access_token`
-
-submission endpoint ใช้ cookie auth ดังนั้นใน Postman ต้อง login ก่อน
-
-request สำหรับ login ของระบบนี้คือ:
-
-- Method: `POST`
-- URL: `http://127.0.0.1:8000/api/auth/login`
-- Headers:
-  - `Content-Type: application/json`
-- Body:
-  - เลือก `raw`
-  - เลือกชนิด `JSON`
-
-ตัวอย่าง body:
-
-```json
-{
-  "email": "submission-student@example.com",
-  "password": "your-password"
-}
-```
-
-เมื่อ login สำเร็จ backend จะ set cookie `access_token` กลับมาให้ และ Postman ควรเก็บ cookie นี้ไว้ใน domain ของ backend โดยอัตโนมัติ
-
-สิ่งที่ควรตรวจหลัง login:
-
-- response status สำเร็จ
-- Postman มี cookie `access_token`
-- cookie ถูกผูกกับ domain ที่จะใช้ยิง request ต่อไปจริง
-
-ถ้า Postman ไม่เก็บ cookie ให้อัตโนมัติ ให้เปิด cookie manager แล้วเพิ่ม `access_token` เองให้ตรงกับ domain ที่จะยิง
-
-### 4. สร้าง request สำหรับส่งงานจาก repo
-
-ตัวอย่างสำหรับ `POST /api/submission/{assignment_id}`
-
-หมายเหตุ:
-
-- `assignment_id` ไม่ได้ใช้แค่ระบุว่าส่งงานชิ้นไหน แต่ยังเป็นตัวกำหนด execution mode ของ submission นี้ด้วย
-- ตัวอย่างเช่น ถ้า assignment นั้นผูกกับ `Project` ระบบจะ map เป็น `fullstack` ให้อัตโนมัติ
-
-ตั้งค่าใน Postman แบบนี้:
-
-- Method: `POST`
-- URL: `http://127.0.0.1:8000/api/submission/1`
-- Auth: ไม่ต้องใส่ Bearer ถ้าใช้ cookie อยู่แล้ว
-- Headers:
-  - `ngrok-skip-browser-warning: true` เฉพาะกรณีเรียกผ่าน ngrok free tier
-- Body:
-  - เลือก `form-data`
-  - เพิ่ม key `repo_url` ชนิด Text
-  - value เช่น `https://github.com/oreongab/thailand-tourist-guide-web`
-
-เมื่อสำเร็จ response จะเป็นลักษณะ accepted หรือ queued และจะได้ `submission_id` กลับมา
-
-### 5. สร้าง request สำหรับส่งงานจาก zip
-
-ตั้งค่าใน Postman แบบนี้:
-
-- Method: `POST`
-- URL: `http://127.0.0.1:8000/api/submission/1`
-- Headers:
-  - `ngrok-skip-browser-warning: true` ถ้าเรียกผ่าน ngrok
-- Body:
-  - เลือก `form-data`
-  - เพิ่ม key `file`
-  - เปลี่ยนชนิดเป็น File
-  - เลือกไฟล์ zip ของโปรเจกต์
-
-ข้อสำคัญ:
-
-- ส่ง `file` หรือ `repo_url` อย่างใดอย่างหนึ่งเท่านั้น
-- ถ้าจะส่ง `env` ก็ใส่เพิ่มเป็น Text field ใน `form-data`
-
-### 6. Poll สถานะของ submission
-
-หลังจากได้ `submission_id` แล้ว ให้สร้าง request ใหม่:
-
-- Method: `GET`
-- URL: `http://127.0.0.1:8000/api/submission/<submission_id>`
-
-field สำคัญที่ควรดูใน response:
-
-- `pipeline_status`
-- `steps`
-- `deployment`
-- `testcase`
-- `cyber`
-- `artifacts`
-
-ถ้าเป็น `fullstack` ใน phase นี้ ให้คาดหวังว่า:
-
-- deployment ทำงาน
-- cyber scan ทำงาน
-- testcase ถูก mark เป็น skipped
-
-### 7. ดูรายการ artifact
-
-สร้าง request:
-
-- Method: `GET`
-- URL: `http://127.0.0.1:8000/api/submission/<submission_id>/artifacts`
-
-response จะบอกว่า submission นี้มี artifact อะไรบ้าง เช่น scan result, deployment bundle, log หรือไฟล์ผลลัพธ์อื่น ๆ
-
-### 8. ดาวน์โหลด artifact
-
-เมื่อได้ `artifact_id` จากขั้นก่อนหน้า ให้สร้าง request:
-
-- Method: `GET`
-- URL: `http://127.0.0.1:8000/api/submission/<submission_id>/artifacts/<artifact_id>`
-
-ใน Postman ให้กด `Send and Download` ถ้าต้องการบันทึกไฟล์ลงเครื่องโดยตรง
-
-### 9. ทดสอบผ่าน ngrok
-
-ถ้าจะทดสอบจาก URL ภายนอก เช่น:
-
-- `https://fa89-34-63-19-90.ngrok-free.app`
-
-ให้เปลี่ยน URL ของทุก request เป็น domain ของ ngrok และเพิ่ม header นี้ใน Postman:
-
-- `ngrok-skip-browser-warning: true`
-
-กรณีที่ Postman ใช้ cookie ผ่าน ngrok ให้ตรวจว่าคุกกี้ถูกผูกกับ domain ของ ngrok ไม่ใช่ domain ของ localhost
-
-## ตัวอย่าง flow แนะนำใน Postman
-
-ถ้าจะจัดเป็น collection สำหรับทดสอบ แนะนำลำดับนี้:
-
-1. Login
-2. Register ถ้ายังไม่มีบัญชี
-3. Submit from Repo หรือ Submit from Zip
-4. Get Submission Status
-5. List Submission Artifacts
-6. Download Selected Artifact
-
-ตัวแปรที่ควรเก็บใน Postman environment หรือ collection variables:
-
-- `base_url`
-- `assignment_id`
-- `submission_id`
-
-ตัวอย่างค่า:
+- Docker Desktop พร้อมใช้งาน และ `GET /health` ต้องได้ `docker_available: true`
+- ถ้าจะให้ cyber scan ทำงาน ต้องมี `SNYK_TOKEN` และติดตั้ง `snyk` CLI ใน `PATH`
+- ถ้าจะ submit แบบ `repo_url` ต้องมี `git` ใน `PATH`
+- ถ้าจะทดสอบผ่าน ngrok ให้ใช้ base URL ของ ngrok และเพิ่ม header `ngrok-skip-browser-warning: true`
+
+## สรุปลำดับจริง
+
+1. login teacher
+2. create classroom
+3. login student
+4. student join classroom ด้วย code
+5. login teacher อีกรอบ
+6. create assignment
+7. login student อีกรอบ
+8. submit repo หรือ zip เข้า assignment
+9. poll status จน pipeline จบ
+10. list artifacts และ download artifact ที่ต้องการ
+
+## ตัวแปรที่แนะนำใน Postman Environment
 
 ```text
 base_url = http://127.0.0.1:8000
-assignment_id = 1
+teacher_email = teacher.e2e@example.com
+teacher_password = Passw0rd!123
+student_email = student.e2e@example.com
+student_password = Passw0rd!123
+classroom_id =
+classroom_code =
+assignment_id =
+submission_id =
+artifact_id =
 ```
 
-ตัวอย่าง test script ใน Postman เพื่อเก็บ `submission_id` จาก response ของการ submit:
+## 1. Login Teacher
+
+- Method: `POST`
+- URL: `{{base_url}}/api/auth/login`
+- Body: `raw` -> `JSON`
+
+```json
+{
+  "email": "{{teacher_email}}",
+  "password": "{{teacher_password}}"
+}
+```
+
+หมายเหตุ:
+
+- response จะคืน `access_token`
+- backend จะ set cookie `access_token` ให้ด้วย
+- ใน Postman ให้ดูที่ cookie jar ว่ามี cookie สำหรับ domain เดียวกับ `base_url`
+
+## 2. Create Classroom
+
+- Method: `POST`
+- URL: `{{base_url}}/api/classroom/`
+- Body: `raw` -> `JSON`
+
+```json
+{
+  "name": "Submission E2E Classroom",
+  "semester": "2/2026",
+  "description": "Used for submission flow testing",
+  "learningoutcomes": "Deploy and verify fullstack projects"
+}
+```
+
+Test script ที่แนะนำ:
+
+```javascript
+const json = pm.response.json();
+pm.collectionVariables.set("classroom_id", json.id);
+pm.collectionVariables.set("classroom_code", json.code);
+```
+
+## 3. Login Student
+
+- Method: `POST`
+- URL: `{{base_url}}/api/auth/login`
+- Body: `raw` -> `JSON`
+
+```json
+{
+  "email": "{{student_email}}",
+  "password": "{{student_password}}"
+}
+```
+
+## 4. Join Classroom
+
+- Method: `POST`
+- URL: `{{base_url}}/api/classroommember/?code={{classroom_code}}`
+- Body: none
+
+หมายเหตุ:
+
+- endpoint นี้รับ `code` เป็น query parameter
+- request นี้ต้องใช้ cookie ของ student ไม่ใช่ teacher
+
+## 5. Login Teacher Again
+
+ทำซ้ำ request login ของ teacher เพื่อให้ cookie ปัจจุบันกลับมาเป็นของ teacher ก่อนสร้าง assignment
+
+## 6. Create Assignment
+
+- Method: `POST`
+- URL: `{{base_url}}/api/assignment/`
+- Body: `form-data`
+
+required fields:
+
+- `title` = `Thailand Tourist Fullstack`
+- `description` = `Fullstack submission test`
+- `start_date` = `2026-04-02T20:00:00+07:00`
+- `due_date` = `2026-04-09T20:00:00+07:00`
+- `is_group` = `false`
+- `project_type_id` = `3`
+- `language_id` = `2`
+- `classroom_id` = `{{classroom_id}}`
+
+หมายเหตุ:
+
+- `project_type_id = 3` ต้อง map ไปชื่อ `Project` เพื่อให้ submission กลายเป็น `fullstack`
+- `attachment` และ `testcase` เป็น optional
+
+Test script ที่แนะนำ:
+
+```javascript
+const json = pm.response.json();
+pm.collectionVariables.set("assignment_id", json.id);
+```
+
+## 7. Login Student Again
+
+ทำซ้ำ request login ของ student เพื่อให้ cookie ปัจจุบันกลับมาเป็นของ student ก่อน submit
+
+## 8. Submit From Repository
+
+- Method: `POST`
+- URL: `{{base_url}}/api/submission/{{assignment_id}}`
+- Body: `form-data`
+
+ตัวอย่างสำหรับ thailand-tourist-guide-web:
+
+- `repo_url` = `https://github.com/oreongab/thailand-tourist-guide-web`
+- `env` = `production`
+
+ตัวอย่างสำหรับ GoSmooth-WebPro2:
+
+- `repo_url` = `https://github.com/Akanoito89003/GoSmooth-WebPro2`
+- `env` = `production`
+
+ข้อสำคัญ:
+
+- ส่ง `repo_url` หรือ `file` อย่างใดอย่างหนึ่งเท่านั้น
+- request นี้ต้องใช้ cookie ของ student
+
+Test script ที่แนะนำ:
 
 ```javascript
 const json = pm.response.json();
@@ -477,11 +401,70 @@ if (json.submission_id) {
 }
 ```
 
-จากนั้น request ถัดไปสามารถอ้าง URL แบบนี้ได้:
+## 9. Poll Submission Status
 
-```text
-{{base_url}}/api/submission/{{submission_id}}
+- Method: `GET`
+- URL: `{{base_url}}/api/submission/{{submission_id}}`
+
+field สำคัญที่ควรดู:
+
+- `pipeline_status`
+- `steps.cyber.status`
+- `steps.deployment.status`
+- `steps.testcase.status`
+- `deployment.preview_url`
+- `artifacts`
+
+การตีความผลสำหรับ `fullstack`:
+
+- `cyber` ควรเป็น `success` หรือ `error`
+- `deployment` ควรเป็น `success`
+- `testcase` จะเป็น `skipped` โดย design ของ phase ปัจจุบัน
+- `pipeline_status` มักเป็น `success` หรือ `partial_success`
+
+## 10. List Artifacts
+
+- Method: `GET`
+- URL: `{{base_url}}/api/submission/{{submission_id}}/artifacts`
+
+Test script ที่แนะนำ:
+
+```javascript
+const json = pm.response.json();
+const firstCyber = (json.artifacts || []).find(a => a.category === 'cyber');
+if (firstCyber) {
+  pm.collectionVariables.set('artifact_id', firstCyber.artifact_id);
+}
 ```
+
+## 11. Download Artifact
+
+- Method: `GET`
+- URL: `{{base_url}}/api/submission/{{submission_id}}/artifacts/{{artifact_id}}`
+
+ใน Postman ให้ใช้ `Send and Download` ถ้าต้องการบันทึกไฟล์
+
+## 12. Submit From ZIP แทน Repo
+
+ถ้าจะทดสอบแบบ zip ให้ใช้ request เดียวกับข้อ 8 แต่เปลี่ยน body เป็น:
+
+- `file` = เลือก zip file
+- `env` = `production`
+
+และต้องไม่ส่ง `repo_url`
+
+## เคสที่ยืนยันแล้วในระบบ
+
+- `https://github.com/oreongab/thailand-tourist-guide-web`
+- `https://github.com/Akanoito89003/GoSmooth-WebPro2`
+
+ทั้งสองตัว deploy แบบ `fullstack` ผ่านได้ในระบบ deploy ปัจจุบันบน Windows host นี้
+
+## หมายเหตุสำคัญเรื่อง cyber scan
+
+- ถ้าใน `manifest.json` ไม่มี folder `artifacts/cyber/` แต่ `steps.cyber.status = error` แปลว่า cyber step ถูกเรียกแล้วแต่ล้มเหลวก่อนเขียน artifact
+- ในกรณีของ submission เก่าที่เกิดก่อน fix ล่าสุดบน Windows อาจเจอ error จากการ decode output ของ `snyk` ทำให้ไม่ได้ `scan.json`
+- submission เก่าจะไม่ย้อนกลับมา rerun cyber ให้อัตโนมัติ ต้อง submit ใหม่ถ้าต้องการ artifact ใหม่
 
 ## ผลการทดสอบที่ยืนยันแล้ว
 

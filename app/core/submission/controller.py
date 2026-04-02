@@ -48,26 +48,29 @@ async def create_submission(
 @router.get("/{submission_id}", response_model=SubmissionManifest)
 def get_submission_status(
     submission_id: str,
+    db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    return get_submission_manifest_service(submission_id)
+    return get_submission_manifest_service(submission_id, db, current_user)
 
 
 @router.get("/{submission_id}/artifacts", response_model=SubmissionArtifactListResponse)
 def list_submission_artifacts(
     submission_id: str,
+    db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    return list_submission_artifacts_service(submission_id)
+    return list_submission_artifacts_service(submission_id, db, current_user)
 
 
 @router.get("/{submission_id}/artifacts/{artifact_id}")
 def download_submission_artifact(
     submission_id: str,
     artifact_id: str,
+    db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    artifact, artifact_path = resolve_submission_artifact_service(submission_id, artifact_id)
+    artifact, artifact_path = resolve_submission_artifact_service(submission_id, artifact_id, db, current_user)
     return FileResponse(
         path=artifact_path,
         media_type=artifact.content_type,

@@ -74,7 +74,10 @@ def get_assignment_by_id(db: Session, assignment_id: int) -> Assignment:
             Attachment.deleted_date.is_(None),
             include_aliases=True
             )
-            ).filter(Assignment.id == assignment_id).first()
+            ).filter(
+            Assignment.id == assignment_id,
+            Assignment.deleted_date.is_(None)
+            ).first()
 
 
 def update_assignment(db: Session, assignment: Assignment, update_data: dict) -> Assignment:
