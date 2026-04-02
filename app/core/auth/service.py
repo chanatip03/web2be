@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 
-from app.utils.generate_token import verify_password
+from app.utils.generate_token import verify_password, hash_password
 from . import repository
 
 def authenticate_user(db: Session, email: str, password: str):
@@ -26,5 +26,8 @@ def authenticate_admin(db: Session, email: str, password: str):
 
 def get_user_data_service(db: Session, current_user: int):
     user = repository.get_user_data(db, current_user)
-
     return user
+
+def reset_user_password_service(db: Session, user_id: int, new_password: str):
+    hashed = hash_password(new_password)
+    return repository.update_user_password(db, user_id, hashed)
