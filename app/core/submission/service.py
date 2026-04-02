@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
+import json
 import shutil
 import subprocess
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,21 +16,25 @@ from fastapi import BackgroundTasks, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.assignment.repository import get_assignment_by_id
+from app.core.classroom.repository import is_classroom_of_teacher
 from app.core.classroommember.repository import is_student_in_classroom
 from app.core.security_scan.fs import validate_submission
 from app.core.security_scan.normalizer import normalize_code_result
 from app.core.security_scan.snyk_code import scan_source_code
-from app.core.student.repository import get_student_by_user_id
+from app.core.user.repository import get_student_by_user_id, get_teacher_by_user_id
+from app.db.database import SessionLocal
 from app.deployment.core.config import settings
 from app.deployment.models.deployment import DeploymentStatus
 from app.deployment.models.project import FileNode, ProjectMetadata
+from app.deployment.services.docker.client import docker_client
 from app.deployment.services.analyzer.file_scanner import build_file_tree
 from app.deployment.services.deployer.pipeline import (
     deployment_store,
     project_store,
     run_deployment,
 )
-from app.testcase.services.runner import run_robot_tests_with_suite_content
+from app.models.schema import Project, SubmissionOf, SubmissionTypeEnum
+from app.core.generatetestcase.services.runner import run_robot_tests_with_suite_content
 from app.utils.r2 import R2_PUBLIC_URL, get_file_bytes
 
 from .dto import SubmissionAcceptedResponse, SubmissionArtifactListResponse
@@ -169,6 +176,139 @@ def _submission_source_name(source_ref: str | None, source_type: str) -> str:
     return "submission"
 
 
+def _command_exists(command: str) -> bool:
+    return shutil.which(command) is not None
+
+
+def _docker_compose_available() -> bool:
+    if not _command_exists("docker"):
+        return False
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+def _ensure_submission_runtime_ready(
+    *,
+    execution_mode: str,
+    uses_repo_url: bool,
+    requires_testcase: bool,
+) -> None:
+    failures: list[str] = []
+
+    if not docker_client.is_available():
+        failures.append("Docker daemon is unavailable. Start Docker Desktop and ensure the selected context is running.")
+
+    if execution_mode == "fullstack" and not _docker_compose_available():
+        failures.append("`docker compose` is unavailable. Install Docker Compose v2 or ensure Docker Desktop is configured correctly.")
+
+    if uses_repo_url and not _command_exists("git"):
+        failures.append("`git` is unavailable in PATH, so repository submissions cannot be cloned.")
+
+    if not _command_exists("snyk"):
+        failures.append("`snyk` is unavailable in PATH, so the cybersecurity scan step cannot run.")
+
+    if requires_testcase and importlib.util.find_spec("robot") is None:
+        failures.append(
+            f"Robot Framework is not installed in the active Python environment ({sys.executable})."
+        )
+
+    if failures:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Submission runtime prerequisites are not satisfied.",
+                "issues": failures,
+            },
+        )
+
+
+def _create_submission_records(
+    db: Session,
+    *,
+    student_id: int,
+    source_type: str,
+    env: str | None,
+    execution_mode: str,
+) -> Project:
+    submission_type = (
+        SubmissionTypeEnum.file if source_type == "zip" else SubmissionTypeEnum.github
+    )
+    project = Project(
+        group_id=None,
+        submission_type=submission_type,
+        env=env or execution_mode,
+    )
+    db.add(project)
+    db.flush()
+
+    db.add(
+        SubmissionOf(
+            project_id=project.id,
+            student_id=student_id,
+        )
+    )
+    db.commit()
+    db.refresh(project)
+    return project
+
+
+def _persist_project_results(
+    project_db_id: int | None,
+    *,
+    cybersecurity_result: dict | None = None,
+    testcase_result: dict | None = None,
+) -> None:
+    if project_db_id is None:
+        return
+
+    db = SessionLocal()
+    try:
+        project = db.query(Project).filter(Project.id == project_db_id).first()
+        if not project:
+            return
+        if cybersecurity_result is not None:
+            project.cybersecurity_result = json.dumps(cybersecurity_result, ensure_ascii=False)
+        if testcase_result is not None:
+            project.testcase_result = json.dumps(testcase_result, ensure_ascii=False)
+        db.commit()
+    finally:
+        db.close()
+
+
+def _ensure_submission_access(
+    manifest: SubmissionManifest,
+    db: Session,
+    current_user,
+) -> SubmissionManifest:
+    role = current_user["role"]
+    if role == "admin":
+        return manifest
+
+    if role == "student":
+        if manifest.submitted_by_user_id != current_user["id"]:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Submission access denied")
+        return manifest
+
+    if role == "teacher":
+        teacher = get_teacher_by_user_id(db, current_user["id"])
+        assignment = get_assignment_by_id(db, manifest.assignment_id)
+        if not teacher or not assignment:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Submission access denied")
+        if not is_classroom_of_teacher(db, assignment.classroom_id, teacher.id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Submission access denied")
+        return manifest
+
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Submission access denied")
+
+
 async def create_submission_service(
     *,
     assignment_id: int,
@@ -202,6 +342,13 @@ async def create_submission_service(
 
     submission_id = uuid.uuid4().hex
     execution_mode = _resolve_execution_mode(assignment)
+    requires_testcase = execution_mode in {"frontend-only", "backend-only"} and bool(assignment.testcase_url)
+    _ensure_submission_runtime_ready(
+        execution_mode=execution_mode,
+        uses_repo_url=bool(payload.repo_url),
+        requires_testcase=requires_testcase,
+    )
+
     create_submission_root(submission_id)
 
     source_dir = get_source_dir(submission_id)
@@ -219,11 +366,20 @@ async def create_submission_service(
         source_ref = payload.repo_url
         _clone_repo_to_source(payload.repo_url, source_dir)
 
+    project = _create_submission_records(
+        db,
+        student_id=student.id,
+        source_type=source_type,
+        env=payload.env,
+        execution_mode=execution_mode,
+    )
+
     manifest = build_initial_manifest(
         submission_id=submission_id,
         assignment_id=assignment_id,
         submitted_by_user_id=current_user["id"],
         student_id=student.id,
+        project_db_id=project.id,
         execution_mode=execution_mode,
         source_type=source_type,
         source_ref=source_ref,
@@ -339,6 +495,7 @@ async def _run_cyber_scan_step(manifest: SubmissionManifest) -> None:
             "message": str(exc),
         }
         _set_step_finished(manifest, "cyber", "error", error=str(exc))
+    _persist_project_results(manifest.project_db_id, cybersecurity_result=manifest.cyber)
     write_manifest(manifest)
 
 
@@ -557,6 +714,7 @@ async def _run_testcase_step(manifest: SubmissionManifest) -> None:
         }
         _set_step_finished(manifest, "testcase", "error", error=str(exc))
 
+    _persist_project_results(manifest.project_db_id, testcase_result=manifest.testcase)
     write_manifest(manifest)
 
 
@@ -579,14 +737,20 @@ async def _load_testcase_suite_content(testcase_url: str) -> str:
         return response.text
 
 
-def get_submission_manifest_service(submission_id: str) -> SubmissionManifest:
+def get_submission_manifest_service(submission_id: str, db: Session, current_user) -> SubmissionManifest:
     manifest = read_manifest(submission_id)
+    _ensure_submission_access(manifest, db, current_user)
     set_artifact_download_urls(manifest)
     return manifest
 
 
-def list_submission_artifacts_service(submission_id: str) -> SubmissionArtifactListResponse:
+def list_submission_artifacts_service(
+    submission_id: str,
+    db: Session,
+    current_user,
+) -> SubmissionArtifactListResponse:
     manifest = read_manifest(submission_id)
+    _ensure_submission_access(manifest, db, current_user)
     set_artifact_download_urls(manifest)
     return SubmissionArtifactListResponse(
         submission_id=submission_id,
@@ -594,7 +758,13 @@ def list_submission_artifacts_service(submission_id: str) -> SubmissionArtifactL
     )
 
 
-def resolve_submission_artifact_service(submission_id: str, artifact_id: str):
+def resolve_submission_artifact_service(
+    submission_id: str,
+    artifact_id: str,
+    db: Session,
+    current_user,
+):
     manifest = read_manifest(submission_id)
+    _ensure_submission_access(manifest, db, current_user)
     artifact, artifact_path = resolve_artifact_path(manifest, artifact_id)
     return artifact, artifact_path

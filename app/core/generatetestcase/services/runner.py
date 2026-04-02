@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -126,7 +127,7 @@ async def run_robot_tests(project_id: str) -> TestResult:
 
     try:
         process = await asyncio.create_subprocess_exec(
-            "python", "-m", "robot",
+            sys.executable, "-m", "robot",
             "--outputdir", str(output_dir),
             "--loglevel", "INFO",
             str(suite_file),
@@ -210,7 +211,7 @@ async def run_robot_tests_with_suite_content(
 
     try:
         process = await asyncio.create_subprocess_exec(
-            "python", "-m", "robot",
+            sys.executable, "-m", "robot",
             "--outputdir", str(output_dir),
             "--loglevel", "INFO",
             str(suite_file),

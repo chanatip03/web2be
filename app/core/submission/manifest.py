@@ -34,6 +34,7 @@ class SubmissionManifest(BaseModel):
     assignment_id: int
     submitted_by_user_id: int
     student_id: int
+    project_db_id: Optional[int] = None
     execution_mode: str
     source_type: str
     source_ref: Optional[str] = None
@@ -61,6 +62,7 @@ def build_initial_manifest(
     assignment_id: int,
     submitted_by_user_id: int,
     student_id: int,
+    project_db_id: Optional[int],
     execution_mode: str,
     source_type: str,
     source_ref: Optional[str],
@@ -83,6 +85,7 @@ def build_initial_manifest(
         assignment_id=assignment_id,
         submitted_by_user_id=submitted_by_user_id,
         student_id=student_id,
+        project_db_id=project_db_id,
         execution_mode=execution_mode,
         source_type=source_type,
         source_ref=source_ref,

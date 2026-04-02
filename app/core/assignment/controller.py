@@ -43,7 +43,7 @@ async def create_assignment(
             testcase_url = None
         
         attachment_urls = []
-        for file in attachment:
+        for file in attachment or []:
             file_bytes = await file.read()
             _, url = upload_file(
                 f"attachment/{data.title}/{file.filename}",

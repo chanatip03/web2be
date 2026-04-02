@@ -4,6 +4,7 @@ import json
 import mimetypes
 import os
 import shutil
+import time
 import uuid
 import zipfile
 from pathlib import Path
@@ -59,12 +60,22 @@ def write_manifest(manifest: SubmissionManifest) -> Path:
     touch_manifest(manifest)
     path = get_manifest_path(manifest.submission_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(".tmp")
-    temp_path.write_text(
-        json.dumps(manifest.model_dump(mode="json"), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    temp_path.replace(path)
+    payload = json.dumps(manifest.model_dump(mode="json"), indent=2, ensure_ascii=False)
+
+    last_error: OSError | None = None
+    for _ in range(10):
+        temp_path = path.with_name(f"{path.stem}.{uuid.uuid4().hex}.tmp")
+        try:
+            temp_path.write_text(payload, encoding="utf-8")
+            temp_path.replace(path)
+            return path
+        except PermissionError as exc:
+            last_error = exc
+            temp_path.unlink(missing_ok=True)
+            time.sleep(0.05)
+
+    if last_error is not None:
+        raise last_error
     return path
 
 
