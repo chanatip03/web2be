@@ -1,11 +1,12 @@
-from datetime import timezone
 from typing import List, Optional
 from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException
 
 from app.core.user.repository import get_teacher_by_user_id
 from app.models.schema import Assignment, Attachment
-from app.utils.r2 import delete_file
+from app.utils.r2 import delete_file, upload_file, get_file_bytes
+import io
+import zipfile
 from .dto import CreateAssignmentRequest, UpdateAssignmentRequest
 from .repository import (
     create_assignment,
@@ -144,6 +145,68 @@ def update_assignment_service(
 
     return assignment
 
+def update_assignment_testcase_service(
+    assignment_id: int,
+    content: str,
+    db: Session,
+    current_user,
+):
+    if current_user["role"] != "teacher":
+        raise ValueError("Only teachers can update assignments")
+
+    teacher = get_teacher_by_user_id(db, current_user["id"])
+    if not teacher:
+        raise HTTPException(status_code=403, detail="Only teachers can update assignments")
+
+    assignment = get_assignment_by_id(db, assignment_id)
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    owner = is_classroom_of_teacher(db, assignment.classroom_id, teacher.id)
+    if not owner:
+        raise ValueError("Not your classroom")
+
+    file_bytes = content.encode("utf-8")
+
+    if assignment.testcase_url:
+        try:
+            delete_file(assignment.testcase_url)
+        except Exception:
+            pass
+            
+    safe_title = assignment.title or "untitled"
+    _, testcase_url = upload_file(
+        f"testcase/{safe_title}/testcase.robot",
+        file_bytes,
+        "text/plain"
+    )
+
+    assignment.testcase_url = testcase_url
+    db.commit()
+    db.refresh(assignment)
+
+    return assignment
+
+def get_assignment_testcase_content_service(assignment_id: int, db: Session):
+    assignment = get_assignment_by_id(db, assignment_id)
+    if not assignment or not assignment.testcase_url:
+        raise HTTPException(status_code=404, detail="Testcase not found")
+        
+    import os
+    r2_public_url = os.getenv("R2_PUBLIC_URL", "")
+    key = assignment.testcase_url.replace(r2_public_url.rstrip("/") + "/", "")
+    
+    try:
+        file_bytes = get_file_bytes(key)
+        if key.endswith(".zip"):
+            with zipfile.ZipFile(io.BytesIO(file_bytes), "r") as zf:
+                first_name = zf.namelist()[0]
+                content = zf.read(first_name).decode("utf-8")
+        else:
+            content = file_bytes.decode("utf-8")
+        return content
+    except Exception as e:
+        raise ValueError(f"Failed to fetch testcase from R2: {str(e)}")
 
 def delete_assignment_service(db: Session, current_user, assignment_id: int):
     if current_user["role"] != "teacher":

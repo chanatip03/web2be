@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import exists
-from app.models.schema import Student, GroupMember, Group
+from app.models.schema import Student, GroupMember, Group, ClassroomMember
 
 def create_group(db: Session, name: str, assignment_id: int) -> Group:
     group = Group(
@@ -32,10 +32,12 @@ def get_group_members(db: Session, group_id: int):
         .first()
     )
     
-def get_available_member(db: Session, assignment_id: int):
+def get_available_member(db: Session, assignment_id: int, classroom_id: int):
     return (
         db.query(Student)
+        .join(ClassroomMember, ClassroomMember.student_id == Student.id)
         .filter(
+            ClassroomMember.classroom_id == classroom_id,
             ~db.query(GroupMember)
             .join(Group)
             .filter(
@@ -45,4 +47,18 @@ def get_available_member(db: Session, assignment_id: int):
             .exists()
         )
         .all()
+    )
+
+def get_user_group_by_assignment(db: Session, student_id: int, assignment_id: int):
+    return (
+        db.query(Group)
+        .join(GroupMember)
+        .options(
+            joinedload(Group.members).joinedload(GroupMember.student)
+        )
+        .filter(
+            Group.assignment_id == assignment_id,
+            GroupMember.student_id == student_id
+        )
+        .first()
     )

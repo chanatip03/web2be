@@ -1,6 +1,7 @@
 from typing import Annotated, Dict, List
 
-from fastapi import APIRouter, Depends, File, HTTPException, status, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, status, UploadFile,Form
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
@@ -13,10 +14,11 @@ from .dto import (
 )
 from .service import (
     create_assignment_service,
-    update_assignment_service,
     get_assignments_service,
     get_assignment_by_id_service,
-    delete_assignment_service
+    delete_assignment_service,
+    update_assignment_testcase_service,
+    get_assignment_testcase_content_service
 )
 
 router = APIRouter(prefix="/assignment", tags=["Assignment"])
@@ -138,6 +140,42 @@ async def update_assignment(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update assignment: {str(e)}"
         )
+
+@router.put("/{assignment_id}/testcase", response_model=AssignmentResponse)
+async def update_assignment_testcase(
+    assignment_id: int,
+    content: Annotated[str, Form(...)],
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[Dict, Depends(get_current_user)],
+):
+    try:
+        assignment = update_assignment_testcase_service(assignment_id, content, db, current_user)
+        return assignment
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update assignment testcase: {str(e)}"
+        )
+
+@router.get("/{assignment_id}/testcase", response_class=PlainTextResponse)
+def get_assignment_testcase(
+    assignment_id: int,
+    db: Annotated[Session, Depends(get_db)]
+):
+    try:
+        content = get_assignment_testcase_content_service(assignment_id, db)
+        return content
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/{assignment_id}", response_model=AssignmentResponse)
 def delete_assignment(

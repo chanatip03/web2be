@@ -1,5 +1,5 @@
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from app.models.schema import Classroom, ClassroomMember
 
 def add_student_to_classroom(db: Session, member: ClassroomMember) -> ClassroomMember:
@@ -7,6 +7,9 @@ def add_student_to_classroom(db: Session, member: ClassroomMember) -> ClassroomM
     db.commit()
     db.refresh(member)
     return member
+
+def get_classroom_member_by_id(db: Session, member_id: int):
+    return db.query(ClassroomMember).options(joinedload(ClassroomMember.student)).filter(ClassroomMember.id == member_id).first()
 
 def is_student_in_classroom(db: Session, classroom_id: int, student_id: int) -> bool:
     """เช็คว่านักเรียนอยู่ใน classroom แล้วหรือยัง"""

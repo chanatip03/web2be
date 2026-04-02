@@ -7,7 +7,8 @@ from .repository import (
     get_classroon_member,
     is_student_in_classroom,
     delete_classroom_member,
-    get_classrooms_by_code
+    get_classrooms_by_code,
+    get_classroom_member_by_id
 )
 
 from app.core.classroom.repository import (
@@ -35,7 +36,7 @@ def join_classroom_by_code(db: Session, user_id: int, code: str):
 
     add_student_to_classroom(db, member)
 
-    return member
+    return get_classroom_member_by_id(db, member.id)
 
 def get_classroom_member_service(db: Session, classroom_id: int):
     member = get_classroon_member(db, classroom_id)
