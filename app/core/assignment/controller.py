@@ -1,6 +1,7 @@
+import logging
 from typing import Annotated, Dict, List
 
-from fastapi import APIRouter, Depends, File, HTTPException, status, UploadFile,Form
+from fastapi import APIRouter, Depends, File, HTTPException, status, UploadFile, Form
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
@@ -20,6 +21,9 @@ from .service import (
     update_assignment_testcase_service,
     get_assignment_testcase_content_service
 )
+from app.core.generatetestcase.services.generator import generate_robot_suite_content
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/assignment", tags=["Assignment"])
 
@@ -53,7 +57,28 @@ async def create_assignment(
             attachment_urls.append(url)
         
         assignment = create_assignment_service(data, testcase_url, attachment_urls, db, current_user)
-        
+
+        # ── Auto-generate Robot Framework testcase from title + description ──
+        if not testcase_url:
+            try:
+                prompt = f"Title: {data.title}"
+                if data.description:
+                    prompt += f"\nDescription: {data.description}"
+                context_id = f"assignment-{assignment.id}"
+                suite_content = await generate_robot_suite_content(
+                    context_id=context_id,
+                    user_prompt=prompt,
+                )
+                assignment = update_assignment_testcase_service(
+                    assignment.id, suite_content, db, current_user
+                )
+            except Exception as gen_err:
+                # Non-fatal: log and continue — assignment is still created
+                logger.warning(
+                    "Auto-generate testcase failed for assignment %s: %s",
+                    assignment.id, gen_err,
+                )
+
         return assignment
     except ValueError as e:
         raise HTTPException(
