@@ -6,6 +6,7 @@ simultaneously without port conflicts.
 
 from __future__ import annotations
 
+import base64
 import logging
 import socket
 from typing import Any, Dict, List, Optional, Tuple
@@ -115,14 +116,12 @@ def generate_compose_yaml(
         f'      - "{backend_host_port}:{backend_port}"',
     ]
 
-    # Some backends (notably Go apps using godotenv) crash if `.env` is missing,
-    # even when all configuration is provided via environment variables.
-    # We mount a generated `.env.deployer` into the container's `/app/.env`.
-    # The builder ensures `.env.deployer` exists (at least empty) for non-frontend modes.
-    lines += [
-        "    volumes:",
-        '      - "./.env.deployer:/app/.env:ro"',
-    ]
+    # NOTE: We intentionally do NOT bind-mount .env.deployer here.
+    # In Docker-in-Docker mode (scanner uses host Docker socket), the host daemon
+    # resolves bind-mount paths on the HOST filesystem — not inside the scanner
+    # container — so paths like /app/app/deployment/data/projects/UUID/.env.deployer
+    # would not exist on the host and cause "not a directory" mount failures.
+    # All runtime config is injected via the environment: section below.
     merged_env = dict(environment or {})
     # Keep the app listen port consistent with the container port mapping.
     # This also prevents `.env` files (mounted for compatibility) from changing
@@ -184,12 +183,45 @@ def generate_compose_yaml(
         frontend_host_port = _find_free_port()
         port_map["frontend"] = {"container": frontend_port, "host": frontend_host_port}
 
+        # Base64-encode the nginx config so we avoid ALL printf/echo escape issues.
+        # BusyBox alpine printf doesn't reliably interpret \n in single-quoted args,
+        # causing nginx to see literal "n" as an unknown directive.
+        # Solution: Python generates the config with real newlines, encodes to base64,
+        # and the container decodes it with `base64 -d` at startup.
+        nginx_conf = (
+            f"server {{\n"
+            f"  listen {frontend_port};\n"
+            f"  server_name _;\n"
+            f"  root /usr/share/nginx/html;\n"
+            f"  index index.html;\n"
+            f"  location /api/ {{\n"
+            f"    proxy_pass http://backend:{backend_port};\n"
+            f"    proxy_http_version 1.1;\n"
+            f"    proxy_set_header Host $http_host;\n"
+            f"    proxy_set_header X-Real-IP $remote_addr;\n"
+            f"  }}\n"
+            f"  location / {{\n"
+            f"    try_files $uri $uri/ /index.html;\n"
+            f"  }}\n"
+            f"}}\n"
+        )
+        nginx_conf_b64 = base64.b64encode(nginx_conf.encode()).decode()
+        inner_sh = (
+            f"echo '{nginx_conf_b64}' "
+            f"| base64 -d > /etc/nginx/conf.d/default.conf "
+            f"&& exec nginx -g 'daemon off;'"
+        )
+
         lines += [
             "",
             "  frontend:",
             f"    image: {frontend_image}",
             "    ports:",
             f'      - "{frontend_host_port}:{frontend_port}"',
+            "    command:",
+            "      - /bin/sh",
+            "      - -c",
+            f'      - "{inner_sh}"',
             "    depends_on:",
             "      backend:",
             "        condition: service_started",

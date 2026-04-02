@@ -82,7 +82,14 @@ async def run_acceptance_checks(
         logger.info("Acceptance probe attempt %d for %s", attempt, list(pending.keys()))
 
         tasks = {
-            svc: _probe_service(sp["url"], acceptable_codes, _probe_paths_for_service(svc))
+            svc: _probe_service(
+                # In Docker-in-Docker mode, the scanner container cannot reach
+                # localhost:<host_port> because localhost resolves to the scanner
+                # container itself. Use host.docker.internal to reach the host.
+                sp["url"].replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal"),
+                acceptable_codes,
+                _probe_paths_for_service(svc),
+            )
             for svc, sp in pending.items()
         }
 
