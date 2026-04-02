@@ -48,6 +48,9 @@ class SubmissionManifest(BaseModel):
     cyber: Dict[str, Any] = Field(default_factory=dict)
     plagiarism: Dict[str, Any] = Field(default_factory=lambda: {"status": "not_requested"})
     artifacts: List[ArtifactRecord] = Field(default_factory=list)
+    # R2 / DB persistence fields (populated during pipeline)
+    source_r2_url: Optional[str] = None
+    db_project_id: Optional[int] = None
 
 
 def touch_manifest(manifest: SubmissionManifest) -> SubmissionManifest:

@@ -232,6 +232,8 @@ class Project(Base):
     assignment_id = Column(Integer, ForeignKey("assignments.id", ondelete="CASCADE"), nullable=False)
 
     submission_type = Column(Enum(SubmissionTypeEnum, name="submission_type_enum"), nullable=False)
+    project_source_code_url = Column(String, nullable=True)
+    project_container_url = Column(String, nullable=True)
     env = Column(String, nullable=False)
 
     testcase_result = Column(String, nullable=True)
@@ -244,40 +246,8 @@ class Project(Base):
     deleted_date = Column(DateTime(timezone=True), nullable=True)
 
     assignment = relationship("Assignment", back_populates="projects")
-    project_files = relationship("ProjectFile", back_populates="project", cascade="all, delete-orphan")
-    project_git = relationship("ProjectGit", back_populates="project", uselist=False, cascade="all, delete-orphan")
     groups = relationship("Group", back_populates="project", cascade="all, delete-orphan")
     submission_of = relationship("SubmissionOf",back_populates="project",cascade="all, delete-orphan")
-
-class ProjectFile(Base):
-    __tablename__ = "project_files"
-
-    id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-
-    file_url = Column(String, nullable=False)
-
-    created_date = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_date = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
-    deleted_date = Column(DateTime(timezone=True), nullable=True)
-
-    project = relationship("Project", back_populates="project_files")
-
-class ProjectGit(Base):
-    __tablename__ = "project_git"
-
-    id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-
-    repo_url = Column(String, nullable=False)
-    branch = Column(String, nullable=False)
-    commit_hash = Column(String, nullable=False)
-
-    created_date = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_date = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
-    deleted_date = Column(DateTime(timezone=True), nullable=True)
-
-    project = relationship("Project", back_populates="project_git")
 
 class Group(Base):
     __tablename__ = "groups"

@@ -8,7 +8,7 @@ from app.db.database import get_db
 from app.utils.r2 import upload_file
 from .dto import LoginRequest, Token, VerifyOtpRequest, register_request
 from .service import authenticate_admin, authenticate_user
-from app.utils.generate_token import create_access_token , decode_token
+from app.utils.generate_token import create_access_token, decode_token
 from app.utils.otp import (
     generate_otp,
     hash_otp,
@@ -19,6 +19,7 @@ from app.utils.otp import (
     )
 from app.core.student.service import create_student
 from app.core.teacher.service import create_teacher
+from app.core.user.repository import get_student_by_user_id, get_teacher_by_user_id
 
 router = APIRouter(prefix="/auth" , tags=["auth"])
 
@@ -162,16 +163,65 @@ def verify_otp(data: VerifyOtpRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/me")
-async def check_user_token(request: Request):
+async def check_user_token(
+    request: Request,
+    db: Session = Depends(get_db),
+):
     token = request.cookies.get("access_token")
-    print(token)
     if not token:
         raise HTTPException(status_code=401, detail="No access token")
-    
+
     try:
         payload = decode_token(token)
-        return payload
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+    user_id = payload.get("userId")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Malformed token")
 
+    from app.models.schema import User
+    user = db.query(User).filter(User.id == int(user_id), User.deleted_date.is_(None)).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    student_profile = get_student_by_user_id(db, user.id)
+    teacher_profile = get_teacher_by_user_id(db, user.id)
+
+    roles = [
+        {"id": r.id, "name": r.name.value if hasattr(r.name, "value") else str(r.name)}
+        for r in user.roles
+    ]
+
+    return {
+        "user": {
+            "id": user.id,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "email": user.email,
+            "image_url": user.image_url,
+            "academy": user.academy,
+        },
+        "roles": roles,
+        "student": {
+            "id": student_profile.id,
+            "student_id": student_profile.student_id,
+            "discord_user_id": student_profile.discord_user_id,
+        } if student_profile else None,
+        "teacher": {
+            "id": teacher_profile.id,
+            "certificate_url": teacher_profile.certificate_url,
+            "is_approved": teacher_profile.is_approved,
+        } if teacher_profile else None,
+    }
+
+
+@router.post("/logout")
+def logout(response: Response):
+    response.delete_cookie(
+        key="access_token",
+        path="/",
+        httponly=True,
+        samesite="lax",
+    )
+    return {"message": "Logged out"}

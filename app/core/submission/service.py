@@ -17,7 +17,7 @@ from app.core.classroommember.repository import is_student_in_classroom
 from app.core.security_scan.fs import validate_submission
 from app.core.security_scan.normalizer import normalize_code_result
 from app.core.security_scan.snyk_code import scan_source_code
-from app.core.student.repository import get_student_by_user_id
+from app.core.user.repository import get_student_by_user_id
 from app.deployment.core.config import settings
 from app.deployment.models.deployment import DeploymentStatus
 from app.deployment.models.project import FileNode, ProjectMetadata
@@ -27,8 +27,8 @@ from app.deployment.services.deployer.pipeline import (
     project_store,
     run_deployment,
 )
-from app.testcase.services.runner import run_robot_tests_with_suite_content
-from app.utils.r2 import R2_PUBLIC_URL, get_file_bytes
+from app.core.generatetestcase.services.runner import run_robot_tests_with_suite_content
+from app.utils.r2 import R2_PUBLIC_URL, get_file_bytes, upload_file as r2_upload_file
 
 from .dto import SubmissionAcceptedResponse, SubmissionArtifactListResponse
 from .fs import (
@@ -241,6 +241,14 @@ async def create_submission_service(
             content_type=upload_file.content_type or "application/zip",
         )
         artifact.download_url = f"/api/submission/{submission_id}/artifacts/{artifact.artifact_id}"
+        # Upload source zip to R2
+        try:
+            r2_key = f"submissions/{submission_id}/source/{archive_path.name}"
+            _, r2_url = r2_upload_file(r2_key, archive_path.read_bytes(), upload_file.content_type or "application/zip")
+            manifest.source_r2_url = r2_url
+        except Exception as exc:
+            # R2 upload failure is non-fatal — pipeline continues
+            print(f"[submission] WARNING: source zip R2 upload failed: {exc}")
 
     set_artifact_download_urls(manifest)
     write_manifest(manifest)
@@ -273,10 +281,15 @@ def _clone_repo_to_source(repo_url: str, source_dir: Path) -> None:
 
 
 def run_submission_pipeline_sync(submission_id: str) -> None:
-    asyncio.run(run_submission_pipeline(submission_id))
+    from app.db.database import SessionLocal
+    db = SessionLocal()
+    try:
+        asyncio.run(run_submission_pipeline(submission_id, db))
+    finally:
+        db.close()
 
 
-async def run_submission_pipeline(submission_id: str) -> None:
+async def run_submission_pipeline(submission_id: str, db: Session) -> None:
     manifest = read_manifest(submission_id)
     manifest.pipeline_status = "running"
     write_manifest(manifest)
@@ -297,6 +310,9 @@ async def run_submission_pipeline(submission_id: str) -> None:
     manifest = read_manifest(submission_id)
     _update_pipeline_status(manifest)
     write_manifest(manifest)
+
+    # Persist project + submission record to DB
+    await _persist_to_db(manifest, db)
 
 
 async def _run_cyber_scan_step(manifest: SubmissionManifest) -> None:
@@ -319,6 +335,15 @@ async def _run_cyber_scan_step(manifest: SubmissionManifest) -> None:
             content_type="application/json",
         )
         set_artifact_download_urls(manifest)
+
+        # Upload cyber scan result to R2
+        cyber_r2_url: Optional[str] = None
+        try:
+            r2_key = f"submissions/{manifest.submission_id}/cyber/scan.json"
+            _, cyber_r2_url = r2_upload_file(r2_key, cyber_path.read_bytes(), "application/json")
+        except Exception as r2_exc:
+            print(f"[submission] WARNING: cyber scan R2 upload failed: {r2_exc}")
+
         manifest.cyber = {
             "status": "success",
             "languages": validation["languages"],
@@ -326,6 +351,7 @@ async def _run_cyber_scan_step(manifest: SubmissionManifest) -> None:
             "issues_found": normalized.get("issues_found", 0),
             "artifact_id": artifact.artifact_id,
             "download_url": artifact.download_url,
+            "r2_url": cyber_r2_url,
         }
         _set_step_finished(
             manifest,
@@ -384,6 +410,8 @@ async def _run_deployment_step(manifest: SubmissionManifest) -> None:
     build_logs_path = Path(settings.projects_dir) / project_id / ".logs" / f"build_logs_{deployment_id}.txt"
 
     artifact_ids: dict[str, str] = {}
+    bundle_r2_url: Optional[str] = None
+
     if bundle_path.exists():
         copied_bundle = copy_artifact_into_submission(submission_id, bundle_path, "deployment")
         bundle_artifact = register_artifact(
@@ -394,6 +422,12 @@ async def _run_deployment_step(manifest: SubmissionManifest) -> None:
             content_type="application/gzip",
         )
         artifact_ids["bundle"] = bundle_artifact.artifact_id
+        # Upload bundle to R2
+        try:
+            r2_key = f"submissions/{submission_id}/deployment/{copied_bundle.name}"
+            _, bundle_r2_url = r2_upload_file(r2_key, copied_bundle.read_bytes(), "application/gzip")
+        except Exception as r2_exc:
+            print(f"[submission] WARNING: bundle R2 upload failed: {r2_exc}")
 
     if build_logs_path.exists():
         copied_logs = copy_artifact_into_submission(submission_id, build_logs_path, "deployment")
@@ -417,6 +451,7 @@ async def _run_deployment_step(manifest: SubmissionManifest) -> None:
             "deploy_mode": manifest.execution_mode,
             "message": error_message,
             "artifacts": artifact_ids,
+            "bundle_r2_url": bundle_r2_url,
         }
         _set_step_finished(manifest, "deployment", "error", error=error_message or "Deployment failed")
         write_manifest(manifest)
@@ -432,6 +467,7 @@ async def _run_deployment_step(manifest: SubmissionManifest) -> None:
         "compose_services": deployment.compose_services,
         "service_ports": [sp.model_dump(mode="json") for sp in deployment.service_ports or []],
         "artifacts": artifact_ids,
+        "bundle_r2_url": bundle_r2_url,
     }
     _set_step_finished(
         manifest,
@@ -510,6 +546,7 @@ async def _run_testcase_step(manifest: SubmissionManifest) -> None:
         testcase_artifacts = {
             "suite": suite_artifact.artifact_id,
         }
+        testcase_r2_urls: dict[str, str] = {}
         result_dir = Path(settings.projects_dir) / manifest.submission_id / "tests" / "results" / result.test_id
         for filename, content_type in (
             ("report.html", "text/html"),
@@ -528,6 +565,13 @@ async def _run_testcase_step(manifest: SubmissionManifest) -> None:
                 content_type=content_type,
             )
             testcase_artifacts[filename] = artifact.artifact_id
+            # Upload each testcase artifact to R2
+            try:
+                r2_key = f"submissions/{manifest.submission_id}/testcase/{filename}"
+                _, tc_r2_url = r2_upload_file(r2_key, copied.read_bytes(), content_type)
+                testcase_r2_urls[filename] = tc_r2_url
+            except Exception as r2_exc:
+                print(f"[submission] WARNING: testcase {filename} R2 upload failed: {r2_exc}")
 
         set_artifact_download_urls(manifest)
         manifest.testcase = {
@@ -537,6 +581,8 @@ async def _run_testcase_step(manifest: SubmissionManifest) -> None:
             "passed": result.passed,
             "failed": result.failed,
             "artifacts": testcase_artifacts,
+            "r2_urls": testcase_r2_urls,
+            "r2_url_report": testcase_r2_urls.get("report.html"),
         }
 
         if result.status == "error":
@@ -558,6 +604,53 @@ async def _run_testcase_step(manifest: SubmissionManifest) -> None:
         _set_step_finished(manifest, "testcase", "error", error=str(exc))
 
     write_manifest(manifest)
+
+
+async def _persist_to_db(manifest: SubmissionManifest, db: Session) -> None:
+    """Create Project + SubmissionOf records in the database at the end of the pipeline."""
+    from app.models.schema import Project, SubmissionOf, SubmissionTypeEnum
+
+    try:
+        sub_type = (
+            SubmissionTypeEnum.github
+            if manifest.source_type == "repo_url"
+            else SubmissionTypeEnum.file
+        )
+
+        # Derive testcase/cyber result storage values
+        testcase_result_url = manifest.testcase.get("r2_url_report") if manifest.testcase else None
+        cybersecurity_result_url = manifest.cyber.get("r2_url") if manifest.cyber else None
+        bundle_r2_url = manifest.deployment.get("bundle_r2_url") if manifest.deployment else None
+
+        project = Project(
+            assignment_id=manifest.assignment_id,
+            submission_type=sub_type,
+            project_source_code_url=manifest.source_r2_url,
+            project_container_url=bundle_r2_url,
+            env=manifest.env or "",
+            testcase_result=testcase_result_url,
+            cybersecurity_result=cybersecurity_result_url,
+        )
+        db.add(project)
+        db.flush()  # get project.id without committing
+
+        submission_record = SubmissionOf(
+            project_id=project.id,
+            student_id=manifest.student_id,
+        )
+        db.add(submission_record)
+        db.commit()
+
+        # Write project id back to manifest so it's queryable later
+        manifest.db_project_id = project.id
+        write_manifest(manifest)
+
+        print(f"[submission] DB: created Project id={project.id} for submission={manifest.submission_id}")
+
+    except Exception as exc:
+        db.rollback()
+        # DB failure is non-fatal — manifest still has pipeline results
+        print(f"[submission] ERROR: DB persistence failed for submission={manifest.submission_id}: {exc}")
 
 
 def _materialize_deployment_project(submission_id: str) -> Path:
