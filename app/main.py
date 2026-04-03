@@ -1,12 +1,13 @@
 from fastapi import FastAPI
 from app.core import api_router
 from fastapi import UploadFile, File, Form
+from app.db.seed import run_seed
 from app.utils.r2 import upload_file, get_file_bytes
 from app.utils.archive import unzip_file, delete_directory
 from fastapi.responses import JSONResponse
 import os
 from fastapi.middleware.cors import CORSMiddleware
-from app.db.database import engine, Base
+from app.db.database import SessionLocal, engine, Base
 import app.models
 from app.deployment import router as deployment_router
 
@@ -15,6 +16,14 @@ app = FastAPI(title="WEB2 API",redirect_slashes=False)
 print("Creating tables...")
 Base.metadata.create_all(bind=engine)
 print("Done!")
+
+@app.on_event("startup")
+def seed_data():
+    db = SessionLocal()
+    try:
+        run_seed(db)
+    finally:
+        db.close()
 
 app.add_middleware(
     CORSMiddleware,

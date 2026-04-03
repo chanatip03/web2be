@@ -43,7 +43,6 @@ def get_classrooms_endpoint(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[dict, Depends(get_current_user)],
 ):
-    
     try:
         classrooms = get_classrooms_service(db, current_user)
         return classrooms  
