@@ -6,6 +6,7 @@ from .repository import (
     create_group_member,
     get_group_members,
     get_available_member,
+    get_user_group_by_assignment,
 )
 
 def create_group_service(
@@ -24,9 +25,10 @@ def create_group_service(
     create_group_member(db, group.id, student.id)
 
     for member_id in member_ids:
-        create_group_member(db, group.id, member_id)
+        if member_id != student.id:
+            create_group_member(db, group.id, member_id)
 
-    return group
+    return get_group_members(db, group.id)
 
 
 def get_group_members_service(db: Session, group_id: int):
@@ -36,9 +38,18 @@ def get_group_members_service(db: Session, group_id: int):
     return group
 
 
-def get_available_member_service(db: Session, assignment_id: int):
-    students = get_available_member(db, assignment_id)
+def get_available_member_service(db: Session, assignment_id: int, classroom_id: int):
+    students = get_available_member(db, assignment_id, classroom_id)
     return students
+
+
+def get_user_group_service(db: Session, user_id: int, assignment_id: int):
+    student = get_student_by_user_id(db, user_id)
+    if not student:
+        raise ValueError("User is not a student")
+    
+    group = get_user_group_by_assignment(db, student.id, assignment_id)
+    return group
 
 
 def update_group_service(
@@ -69,4 +80,4 @@ def update_group_service(
 
     db.commit()
     db.refresh(group)
-    return group
+    return get_group_members(db, group.id)

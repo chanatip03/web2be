@@ -1,6 +1,8 @@
+import logging
 from typing import Annotated, Dict, List
 
-from fastapi import APIRouter, Depends, File, HTTPException, status, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, status, UploadFile, Form
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
@@ -13,11 +15,15 @@ from .dto import (
 )
 from .service import (
     create_assignment_service,
-    update_assignment_service,
     get_assignments_service,
     get_assignment_by_id_service,
-    delete_assignment_service
+    delete_assignment_service,
+    update_assignment_testcase_service,
+    get_assignment_testcase_content_service
 )
+from app.core.generatetestcase.services.generator import generate_robot_suite_content
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/assignment", tags=["Assignment"])
 
@@ -41,7 +47,7 @@ async def create_assignment(
             testcase_url = None
         
         attachment_urls = []
-        for file in attachment:
+        for file in attachment or []:
             file_bytes = await file.read()
             _, url = upload_file(
                 f"attachment/{data.title}/{file.filename}",
@@ -51,7 +57,28 @@ async def create_assignment(
             attachment_urls.append(url)
         
         assignment = create_assignment_service(data, testcase_url, attachment_urls, db, current_user)
-        
+
+        # ── Auto-generate Robot Framework testcase from title + description ──
+        if not testcase_url:
+            try:
+                prompt = f"Title: {data.title}"
+                if data.description:
+                    prompt += f"\nDescription: {data.description}"
+                context_id = f"assignment-{assignment.id}"
+                suite_content = await generate_robot_suite_content(
+                    context_id=context_id,
+                    user_prompt=prompt,
+                )
+                assignment = update_assignment_testcase_service(
+                    assignment.id, suite_content, db, current_user
+                )
+            except Exception as gen_err:
+                # Non-fatal: log and continue — assignment is still created
+                logger.warning(
+                    "Auto-generate testcase failed for assignment %s: %s",
+                    assignment.id, gen_err,
+                )
+
         return assignment
     except ValueError as e:
         raise HTTPException(
@@ -138,6 +165,42 @@ async def update_assignment(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update assignment: {str(e)}"
         )
+
+@router.put("/{assignment_id}/testcase", response_model=AssignmentResponse)
+async def update_assignment_testcase(
+    assignment_id: int,
+    content: Annotated[str, Form(...)],
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[Dict, Depends(get_current_user)],
+):
+    try:
+        assignment = update_assignment_testcase_service(assignment_id, content, db, current_user)
+        return assignment
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update assignment testcase: {str(e)}"
+        )
+
+@router.get("/{assignment_id}/testcase", response_class=PlainTextResponse)
+def get_assignment_testcase(
+    assignment_id: int,
+    db: Annotated[Session, Depends(get_db)]
+):
+    try:
+        content = get_assignment_testcase_content_service(assignment_id, db)
+        return content
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/{assignment_id}", response_model=AssignmentResponse)
 def delete_assignment(

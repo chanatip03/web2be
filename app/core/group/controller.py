@@ -16,7 +16,8 @@ from .service import (
     create_group_service,
     get_group_members_service,
     get_available_member_service,
-    update_group_service
+    update_group_service,
+    get_user_group_service
 )
 
 router = APIRouter(prefix="/group", tags=["Group"])
@@ -55,11 +56,30 @@ def get_group_members_endpoint(
 @router.get("/available/{assignment_id}", response_model=list[StudentResponse])
 def get_available_member_endpoint(
     assignment_id: int,
+    classroom_id: int,
     db: Annotated[Session, Depends(get_db)],
 ):
     try:
-        members = get_available_member_service(db, assignment_id)
+        members = get_available_member_service(db, assignment_id, classroom_id)
         return members
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/my-group/{assignment_id}", response_model=GroupResponse)
+def get_user_group_endpoint(
+    assignment_id: int,
+    current_user: Annotated[Dict, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    try:
+        group = get_user_group_service(db, current_user["id"], assignment_id)
+        if not group:
+            raise HTTPException(status_code=404, detail="Group not found")
+        return group
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
