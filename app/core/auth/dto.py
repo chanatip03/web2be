@@ -2,6 +2,8 @@ from typing import List, Optional
 from fastapi import Form
 from pydantic import BaseModel, ConfigDict, EmailStr
 
+from app.models.schema import RoleEnum
+
 
 class Token(BaseModel):
     access_token: str
@@ -20,7 +22,7 @@ class VerifyOtpRequest(BaseModel):
 
 class RegisterRequest(BaseModel):
     """Registration request DTO. Use RegisterRequest.as_form() for multipart/form-data endpoints."""
-    role: str
+    role_id: int
     first_name: str
     last_name: str
     email: EmailStr
@@ -32,7 +34,7 @@ class RegisterRequest(BaseModel):
     @classmethod
     def as_form(
         cls,
-        role: str = Form(...),
+        role_id: int = Form(...),
         first_name: str = Form(...),
         last_name: str = Form(...),
         email: EmailStr = Form(...),
@@ -41,7 +43,7 @@ class RegisterRequest(BaseModel):
         student_id: Optional[str] = Form(None),
     ):
         return cls(
-            role=role,
+            role_id=role_id,
             first_name=first_name,
             last_name=last_name,
             email=email,
@@ -61,8 +63,7 @@ class RoleResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    name: str
-
+    name: RoleEnum
 
 class UserBaseResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -95,7 +96,4 @@ class MeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     user: UserBaseResponse
-    roles: List[RoleResponse]
-
-    student: Optional[StudentInfo] = None
-    teacher: Optional[TeacherInfo] = None
+    roles: RoleResponse

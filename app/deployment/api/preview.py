@@ -2235,7 +2235,11 @@ async def _proxy_request_to(
     body_override: bytes | None = None,
 ) -> Response:
     """Forward an HTTP request to the upstream container."""
-    upstream_url = f"{base_url}/{path}" if path else f"{base_url}/"
+    # In Docker-in-Docker mode, the scanner container cannot reach student containers
+    # via localhost (which resolves to the scanner itself). Use host.docker.internal
+    # so the request reaches the Windows Docker Desktop host where student ports are bound.
+    dind_base_url = base_url.replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
+    upstream_url = f"{dind_base_url}/{path}" if path else f"{dind_base_url}/"
     if request and request.query_params:
         upstream_url += f"?{request.query_params}"
 

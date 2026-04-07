@@ -1122,6 +1122,22 @@ class DockerBuilder:
                         if any(target in lowered_block for target in permission_targets):
                             continue
 
+                # Strip --chown=<user>:<group> from COPY instructions when the referenced
+                # user doesn't exist in nginx:alpine (e.g. --chown=frontend:nodejs).
+                # Only nginx and root are guaranteed to exist in nginx:alpine.
+                if re.match(r"(?im)^\s*COPY\b", flattened_block) and "--chown=" in flattened_block:
+                    chown_match = re.search(r"--chown=(\S+)", flattened_block)
+                    if chown_match:
+                        chown_val = chown_match.group(1)
+                        user_part = chown_val.split(":")[0]
+                        if user_part not in ("root", "nginx", "0"):
+                            # Rewrite each line in the block to strip the --chown flag
+                            block = [
+                                re.sub(r"\s*--chown=\S+", "", line)
+                                for line in block
+                            ]
+
+
             hardened_lines.extend(block)
 
         # Finalize last stage.
@@ -1921,6 +1937,16 @@ class DockerBuilder:
 
         compose_path = project_path / "docker-compose.yml"
         compose_path.write_text(compose_content, encoding="utf-8")
+
+        # Ensure .env.deployer exists as a file before compose_up.
+        # Docker bind-mounts a file→file; if the source doesn't exist,
+        # Docker creates it as a directory, which causes a mount failure.
+        env_deployer_path = project_path / ".env.deployer"
+        if env_deployer_path.exists() and env_deployer_path.is_dir():
+            import shutil as _shutil
+            _shutil.rmtree(env_deployer_path, ignore_errors=True)
+        if not env_deployer_path.exists():
+            env_deployer_path.write_text("", encoding="utf-8")
 
         project_name = config.project_id
         docker_client.compose_up(str(project_path), project_name)

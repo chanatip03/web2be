@@ -140,7 +140,7 @@ def update_assignment_service(
     if testcase_url:
         assignment.testcase_url = testcase_url
 
-    update_data = data.dict(exclude_unset=True)
+    update_data = data.model_dump(exclude_unset=True, exclude={"classroom_id", "delete_attachment_ids", "delete_testcase_url"})
 
     update_assignment(db, assignment, update_data)
 

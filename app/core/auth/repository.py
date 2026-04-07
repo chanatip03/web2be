@@ -11,9 +11,9 @@ def get_user_data(db: Session, user_id: int):
     user = (
         db.query(User)
         .options(
+            joinedload(User.role),
             joinedload(User.student),
             joinedload(User.teacher),
-            joinedload(User.roles),
         )
         .filter(User.id == user_id)
         .first()

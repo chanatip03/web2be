@@ -17,6 +17,7 @@ from .service import (
     create_assignment_service,
     get_assignments_service,
     get_assignment_by_id_service,
+    update_assignment_service,
     delete_assignment_service,
     update_assignment_testcase_service,
     get_assignment_testcase_content_service
@@ -47,12 +48,13 @@ async def create_assignment(
             testcase_url = None
         
         attachment_urls = []
-        for file in attachment or []:
-            file_bytes = await file.read()
-            _, url = upload_file(
-                f"attachment/{data.title}/{file.filename}",
-            file_bytes,
-            file.content_type
+        if(attachment != None ):
+            for file in attachment:
+                file_bytes = await file.read()
+                _, url = upload_file(
+                    f"attachment/{data.title}/{file.filename}",
+                file_bytes,
+                file.content_type
             )
             attachment_urls.append(url)
         

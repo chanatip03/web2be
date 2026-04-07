@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 from typing import Optional
+from typing_extensions import Annotated
 import uuid
-from fastapi import File, Form, Response, APIRouter, Depends, HTTPException, UploadFile
+from fastapi import File, Response, APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.models.schema import User
@@ -51,14 +52,13 @@ def login(data: LoginRequest, response: Response, db: Session = Depends(get_db))
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    if not user.roles or len(user.roles) != 1:
+    if not user.role:
         raise HTTPException(
             status_code=500,
-            detail="User must have exactly one role"
+            detail="User has no role assigned"
         )
 
-    role = user.roles[0].name
-    role_name = role.value if hasattr(role, "value") else str(role)
+    role_name = user.role.name.value if hasattr(user.role.name, "value") else str(user.role.name)
     role_name = role_name.lower()
 
     token = create_access_token({"userId": str(user.id), "role": role_name})
@@ -68,33 +68,29 @@ def login(data: LoginRequest, response: Response, db: Session = Depends(get_db))
 
 @router.post("/request-otp")
 async def request_otp(
-    data : register_request = Depends(register_request.as_form),
-    student_id: Optional[str] = Form(None),
+    data: register_request = Depends(register_request.as_form),
     certificate: Optional[UploadFile] = File(None),
 ):
     otp = generate_otp()
-    
-    if(data.role == "student"):
-        data.student_id = student_id
 
-    if data.role == "teacher":
+    # role_id 1 = student, role_id 2 = teacher
+    if data.role_id == 2:
         if not certificate:
             raise HTTPException(400, "Certificate required")
 
         content = await certificate.read()
         key = f"certificates/{uuid.uuid4()}.{certificate.filename.split('.')[-1]}"
         _, url = upload_file(key, content, content_type=certificate.content_type)
-
         data.certificate_url = url
 
     save_otp_memory(
-    email=data.email,
-    otp_hash=hash_otp(otp),
-    payload={
-        "role": data.role,
-        "data": data.model_dump(),
-    }
-)
+        email=data.email,
+        otp_hash=hash_otp(otp),
+        payload={
+            "role_id": data.role_id,
+            "data": data.model_dump(),
+        }
+    )
     print("SAVE OTP FOR:", data.email)
 
     send_otp_email(data.email, otp)
@@ -104,7 +100,7 @@ async def request_otp(
 def verify_otp(data: VerifyOtpRequest, db: Session = Depends(get_db)):
     email = data.email
     otp = data.otp
-    
+
     record = get_otp_memory(email)
     if not record:
         raise HTTPException(status_code=400, detail="OTP not found")
@@ -119,54 +115,32 @@ def verify_otp(data: VerifyOtpRequest, db: Session = Depends(get_db)):
             delete_otp_memory(email)
         raise HTTPException(status_code=400, detail="OTP invalid")
 
-    print("SAVE OTP FOR:", email)
-
     payload = record["payload"]
-    role = payload["role"]
-    data = payload["data"]
-
-    if isinstance(data, dict) is False:
-        data = data.model_dump()
+    role_id: int = payload["role_id"]
+    user_data: dict = payload["data"]
 
     try:
-        if role == "student":
-            create_user_service(
-                db,
-                role,
-                data["first_name"],
-                data["last_name"],
-                data["email"],
-                data["password"],
-                data.get("academy"),
-                student_id=data.get("student_id"),
-            )
-
-        elif role == "teacher":
-                create_user_service(
-                    db,
-                    role,
-                    data["first_name"],
-                    data["last_name"],
-                    data["email"],
-                    data["password"],
-                    data["academy"],
-                    data["certificate_url"],
-                )
-        else:
-            raise HTTPException(status_code=400, detail="Invalid role")
-
+        create_user_service(
+            db,
+            role_id,
+            user_data["first_name"],
+            user_data["last_name"],
+            user_data["email"],
+            user_data["password"],
+            user_data.get("academy"),
+            certificate_url=user_data.get("certificate_url"),
+            student_id=user_data.get("student_id"),
+        )
     finally:
         delete_otp_memory(email)
 
-    return {
-        "message": "Register success",
-    }
+    return {"message": "Register success"}
 
 
 @router.get("/me", response_model=MeResponse)
 async def get_user_data(
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[dict, Depends(get_current_user)],
 ):
     user = get_user_data_service(db, current_user["id"])
     return map_user_to_me_response(user)
@@ -174,7 +148,9 @@ async def get_user_data(
 def map_user_to_me_response(user: User):
     return {
         "user": user,
-        "roles": user.roles,
-        "student": user.student,
-        "teacher": user.teacher,
+                "roles": {
+            "id": user.role.id,
+            "name": user.role.name.value, 
+        } if user.role else None,
+
     }
