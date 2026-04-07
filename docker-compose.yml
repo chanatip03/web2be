@@ -26,7 +26,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./data/submissions:/app/data/submissions:ro
+      - ./data/submissions:/app/data/submissions
       - ./data/security_scan_results:/app/data/security_scan_results
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data/projects:/app/app/deployment/data/projects
