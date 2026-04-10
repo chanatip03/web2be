@@ -62,7 +62,7 @@ async def unified_deploy(
             ["git", "clone", "--depth", "1", body.repo_url, str(clone_target)],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=600,
             encoding="utf-8",
             errors="replace",
         )
@@ -70,7 +70,7 @@ async def unified_deploy(
             raise HTTPException(status_code=400, detail=f"Git clone failed: {result.stderr}")
     except subprocess.TimeoutExpired:
         shutil.rmtree(project_dir, ignore_errors=True)
-        raise HTTPException(status_code=408, detail="Git clone timed out (120s)")
+        raise HTTPException(status_code=408, detail="Git clone timed out (600s)")
 
     # Use subdir if specified
     effective_root = clone_target / body.subdir if body.subdir else clone_target

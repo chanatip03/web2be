@@ -210,7 +210,7 @@ class Project(Base):
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=True)
 
     submission_type = Column(Enum(SubmissionTypeEnum, name="submission_type_enum"), nullable=False)
-    project_source_url = Column(String, nullable=False)
+    project_source_url = Column(String, nullable=True)
     env = Column(String, nullable=False)
 
     testcase_result = Column(String, nullable=True)

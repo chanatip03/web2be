@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.assignment.repository import get_assignment_by_id
 from app.core.classroom.repository import is_classroom_of_teacher
 from app.core.classroommember.repository import is_student_in_classroom
+from app.core.group.repository import get_user_group_by_assignment
 from app.core.security_scan.fs import validate_submission
 from app.core.security_scan.normalizer import normalize_code_result
 from app.core.security_scan.snyk_code import scan_source_code
@@ -35,7 +36,7 @@ from app.deployment.services.deployer.pipeline import (
 )
 from app.models.schema import Project, SubmissionOf, SubmissionTypeEnum
 from app.core.generatetestcase.services.runner import run_robot_tests_with_suite_content
-from app.utils.r2 import R2_PUBLIC_URL, get_file_bytes
+from app.utils.r2 import R2_PUBLIC_URL, get_file_bytes, upload_file as r2_upload_file
 
 from .dto import SubmissionAcceptedResponse, SubmissionArtifactListResponse
 from .fs import (
@@ -234,27 +235,46 @@ def _create_submission_records(
     db: Session,
     *,
     student_id: int,
+    group_id: Optional[int],
+    is_group: bool,
     source_type: str,
+    source_ref: str | None,
     env: str | None,
     execution_mode: str,
 ) -> Project:
+    """Create Project and conditionally SubmissionOf.
+
+    - Group assignment:    Project.group_id = group_id (links the whole group)
+                           No SubmissionOf row — the group already tracks members.
+    - Individual:          Project.group_id = None
+                           SubmissionOf row links the submitting student to the project.
+    """
     submission_type = (
         SubmissionTypeEnum.file if source_type == "zip" else SubmissionTypeEnum.github
     )
+
+    # project_source_url starts as the original source ref (repo URL or zip filename).
+    # It will be updated to the R2 URL after upload completes in the background pipeline.
+    initial_source_url = source_ref or ""
+
     project = Project(
-        group_id=None,
+        group_id=group_id if is_group else None,
         submission_type=submission_type,
+        project_source_url=initial_source_url,
         env=env or execution_mode,
     )
     db.add(project)
     db.flush()
 
-    db.add(
-        SubmissionOf(
-            project_id=project.id,
-            student_id=student_id,
+    if not is_group:
+        # Individual assignment: record the student → project link
+        db.add(
+            SubmissionOf(
+                project_id=project.id,
+                student_id=student_id,
+            )
         )
-    )
+
     db.commit()
     db.refresh(project)
     return project
@@ -265,6 +285,7 @@ def _persist_project_results(
     *,
     cybersecurity_result: dict | None = None,
     testcase_result: dict | None = None,
+    project_source_url: str | None = None,
 ) -> None:
     if project_db_id is None:
         return
@@ -278,6 +299,8 @@ def _persist_project_results(
             project.cybersecurity_result = json.dumps(cybersecurity_result, ensure_ascii=False)
         if testcase_result is not None:
             project.testcase_result = json.dumps(testcase_result, ensure_ascii=False)
+        if project_source_url is not None:
+            project.project_source_url = project_source_url
         db.commit()
     finally:
         db.close()
@@ -340,6 +363,25 @@ async def create_submission_service(
     if not is_student_in_classroom(db, assignment.classroom_id, student.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Student is not in the assignment classroom")
 
+    # ── Resolve group_id ────────────────────────────────────────────
+    is_group = bool(assignment.is_group)
+    resolved_group_id: Optional[int] = None
+
+    if is_group:
+        # Prefer the group_id sent by the frontend; fall back to DB lookup.
+        if payload.group_id:
+            resolved_group_id = payload.group_id
+        else:
+            group = get_user_group_by_assignment(db, student.id, assignment_id)
+            if group:
+                resolved_group_id = group.id
+
+        if resolved_group_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Group assignment requires a group. Please join or create a group first.",
+            )
+
     submission_id = uuid.uuid4().hex
     execution_mode = _resolve_execution_mode(assignment)
     requires_testcase = execution_mode in {"frontend-only", "backend-only"} and bool(assignment.testcase_url)
@@ -369,7 +411,10 @@ async def create_submission_service(
     project = _create_submission_records(
         db,
         student_id=student.id,
+        group_id=resolved_group_id,
+        is_group=is_group,
         source_type=source_type,
+        source_ref=source_ref,
         env=payload.env,
         execution_mode=execution_mode,
     )
@@ -379,6 +424,7 @@ async def create_submission_service(
         assignment_id=assignment_id,
         submitted_by_user_id=current_user["id"],
         student_id=student.id,
+        group_id=resolved_group_id,
         project_db_id=project.id,
         execution_mode=execution_mode,
         source_type=source_type,
@@ -412,19 +458,60 @@ async def create_submission_service(
     )
 
 
+def _sanitize_repo_url(url: str) -> str:
+    """Strip whitespace / newlines that can sneak in via copy-paste."""
+    return "".join(url.split()).strip()
+
+
 def _clone_repo_to_source(repo_url: str, source_dir: Path) -> None:
+    clean_url = _sanitize_repo_url(repo_url)
+
+    # Basic validation — git URLs must start with http(s):// or git@
+    if not (clean_url.startswith("https://") or clean_url.startswith("http://") or clean_url.startswith("git@")):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid repository URL: must start with https://, http://, or git@",
+        )
+
     source_dir.mkdir(parents=True, exist_ok=True)
+
+    # Inherit the current environment and disable ALL credential prompting.
+    # Without this, git tries to open a TTY for username/password input which
+    # fails with "No such device or address" inside Docker / background threads.
+    import os as _os
+    git_env = {**_os.environ}
+    git_env["GIT_TERMINAL_PROMPT"] = "0"   # never prompt on terminal
+    git_env["GIT_ASKPASS"] = "echo"         # return empty string for any credential ask
+    git_env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o StrictHostKeyChecking=no"
+
     result = subprocess.run(
-        ["git", "clone", "--depth", "1", repo_url, str(source_dir)],
+        [
+            "git", "clone",
+            "-c", "credential.helper=",      # disable stored credential helpers
+            "--depth", "1",
+            clean_url,
+            str(source_dir),
+        ],
         capture_output=True,
         text=True,
         timeout=180,
+        env=git_env,
     )
     if result.returncode != 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Git clone failed: {result.stderr or result.stdout}",
-        )
+        stderr = (result.stderr or result.stdout or "").strip()
+        # Produce friendlier messages for the most common failure modes
+        if "could not read Username" in stderr or "Authentication failed" in stderr:
+            detail = (
+                "Git clone failed: the repository requires authentication. "
+                "Please make sure the repository is public, or use a token in the URL "
+                "(e.g. https://<token>@github.com/user/repo.git)."
+            )
+        elif "Repository not found" in stderr or "not found" in stderr.lower():
+            detail = f"Git clone failed: repository not found at {clean_url}"
+        else:
+            detail = f"Git clone failed: {stderr}"
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
     shutil.rmtree(source_dir / ".git", ignore_errors=True)
 
 
@@ -441,6 +528,7 @@ async def run_submission_pipeline(submission_id: str) -> None:
         await _run_cyber_scan_step(manifest)
         await _run_deployment_step(manifest)
         await _run_testcase_step(manifest)
+        await _run_r2_upload_step(manifest)
     except Exception as exc:
         manifest = read_manifest(submission_id)
         manifest.pipeline_status = "error"
@@ -531,11 +619,16 @@ async def _run_deployment_step(manifest: SubmissionManifest) -> None:
             project_name=project_name,
             status="analyzing",
             current_step=1,
+            total_steps=5,
             updated_at=datetime.now(),
         )
     )
 
-    await run_deployment(deployment_id, project_id, manifest.execution_mode)
+    # Pass execution_mode directly — it already matches what the pipeline expects
+    # (frontend-only | backend-only | fullstack). None means auto-detect.
+    deploy_mode = manifest.execution_mode if manifest.execution_mode != "fullstack" else None
+    await run_deployment(deployment_id, project_id, deploy_mode)
+
     deployment = deployment_store.get(deployment_id)
     bundle_path = Path(settings.deployments_dir) / "bundles" / f"{project_id}.tar.gz"
     build_logs_path = Path(settings.projects_dir) / project_id / ".logs" / f"build_logs_{deployment_id}.txt"
@@ -566,7 +659,7 @@ async def _run_deployment_step(manifest: SubmissionManifest) -> None:
     set_artifact_download_urls(manifest)
 
     if not deployment or deployment.status != "success":
-        error_message = deployment.error_message if deployment else "Deployment metadata not found"
+        error_message = (deployment.error_message if deployment else None) or "Deployment metadata not found"
         manifest.deployment = {
             "status": "error",
             "deployment_id": deployment_id,
@@ -575,26 +668,38 @@ async def _run_deployment_step(manifest: SubmissionManifest) -> None:
             "message": error_message,
             "artifacts": artifact_ids,
         }
-        _set_step_finished(manifest, "deployment", "error", error=error_message or "Deployment failed")
+        _set_step_finished(manifest, "deployment", "error", error=error_message)
         write_manifest(manifest)
         return
+
+    # Build preview URL using the deployment object's own method (has fallback logic)
+    preview_url = deployment.get_primary_url()
+
+    # service_ports is a list of ServicePortMapping objects — serialize to dict
+    service_ports_data = []
+    if deployment.service_ports:
+        for sp in deployment.service_ports:
+            if hasattr(sp, "model_dump"):
+                service_ports_data.append(sp.model_dump(mode="json"))
+            elif isinstance(sp, dict):
+                service_ports_data.append(sp)
 
     manifest.deployment = {
         "status": "success",
         "deployment_id": deployment.deployment_id,
         "project_id": deployment.project_id,
         "deploy_mode": deployment.deploy_mode,
-        "preview_url": deployment.preview_url or deployment.get_primary_url(),
+        "preview_url": preview_url,
         "api_url": deployment.api_url,
         "compose_services": deployment.compose_services,
-        "service_ports": [sp.model_dump(mode="json") for sp in deployment.service_ports or []],
+        "service_ports": service_ports_data,
         "artifacts": artifact_ids,
     }
     _set_step_finished(
         manifest,
         "deployment",
         "success",
-        preview_url=manifest.deployment.get("preview_url"),
+        preview_url=preview_url,
     )
     write_manifest(manifest)
 
@@ -715,6 +820,68 @@ async def _run_testcase_step(manifest: SubmissionManifest) -> None:
         _set_step_finished(manifest, "testcase", "error", error=str(exc))
 
     _persist_project_results(manifest.project_db_id, testcase_result=manifest.testcase)
+    write_manifest(manifest)
+
+
+async def _run_r2_upload_step(manifest: SubmissionManifest) -> None:
+    """Upload source zip and deployment bundle to Cloudflare R2.
+
+    Runs as the final step after cyber, deployment, and testcase.
+    Updates project.project_source_url in DB with the R2 URL of the source.
+    Failures are non-fatal; they are logged into manifest.r2_artifacts.
+    """
+    r2_results: dict[str, str] = {}
+    submission_id = manifest.submission_id
+
+    # 1. Upload source zip  ────────────────────────────────────────
+    if manifest.source_type == "zip":
+        original_dir = get_submission_root(submission_id) / "original"
+        zip_files = list(original_dir.glob("*.zip")) if original_dir.exists() else []
+        if zip_files:
+            zip_path = zip_files[0]
+            try:
+                key = f"submissions/{submission_id}/source.zip"
+                _, url = r2_upload_file(key, zip_path.read_bytes(), content_type="application/zip")
+                r2_results["source_zip"] = url
+                # Update DB so project.project_source_url reflects the R2 location
+                _persist_project_results(
+                    manifest.project_db_id,
+                    project_source_url=url,
+                )
+            except Exception as exc:
+                r2_results["source_zip_error"] = str(exc)
+    elif manifest.source_type == "repo_url" and manifest.source_ref:
+        # For repo submissions the source URL is already the GitHub link
+        _persist_project_results(
+            manifest.project_db_id,
+            project_source_url=manifest.source_ref,
+        )
+        r2_results["source_repo_url"] = manifest.source_ref
+
+    # 2. Upload deployment bundle (.tar.gz) ────────────────────────
+    bundle_dir = get_submission_root(submission_id) / "artifacts" / "deployment"
+    bundle_files = list(bundle_dir.glob("*.tar.gz")) if bundle_dir.exists() else []
+    if bundle_files:
+        bundle_path = bundle_files[0]
+        try:
+            key = f"submissions/{submission_id}/bundle.tar.gz"
+            _, url = r2_upload_file(key, bundle_path.read_bytes(), content_type="application/gzip")
+            r2_results["bundle"] = url
+        except Exception as exc:
+            r2_results["bundle_error"] = str(exc)
+
+    # 3. Upload cyber scan result JSON ─────────────────────────────
+    cyber_dir = get_submission_root(submission_id) / "artifacts" / "cyber"
+    scan_file = cyber_dir / "scan.json"
+    if scan_file.exists():
+        try:
+            key = f"submissions/{submission_id}/scan.json"
+            _, url = r2_upload_file(key, scan_file.read_bytes(), content_type="application/json")
+            r2_results["cyber_scan"] = url
+        except Exception as exc:
+            r2_results["cyber_scan_error"] = str(exc)
+
+    manifest.r2_artifacts = r2_results
     write_manifest(manifest)
 
 

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import Optional
+from urllib import response
 from typing_extensions import Annotated
 import uuid
 from fastapi import File, Response, APIRouter, Depends, HTTPException, UploadFile
@@ -153,4 +154,9 @@ def map_user_to_me_response(user: User):
             "name": user.role.name.value, 
         } if user.role else None,
 
-    }
+    } 
+    
+@router.post("/logout")
+async def logout(response: Response):
+    response.delete_cookie("access_token", path="/")
+    return {"message": "Logged out"}

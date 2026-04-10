@@ -11,14 +11,16 @@ from .manifest import ArtifactRecord
 class SubmissionCreateRequest(BaseModel):
     repo_url: Optional[str] = None
     env: Optional[str] = None
+    group_id: Optional[int] = None
 
     @classmethod
     def as_form(
         cls,
         repo_url: Optional[str] = Form(None),
         env: Optional[str] = Form(None),
+        group_id: Optional[int] = Form(None),
     ):
-        return cls(repo_url=repo_url, env=env)
+        return cls(repo_url=repo_url, env=env, group_id=group_id)
 
 
 class SubmissionAcceptedResponse(BaseModel):
