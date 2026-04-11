@@ -277,8 +277,23 @@ def generate_compose_yaml(
         lines += [
             "",
             "  db:",
-            f"    image: {db_image}",
         ]
+
+        if db_init_sql:
+            # Docker-in-Docker breaks absolute/relative volume paths since they refer
+            # to the scanner container, not the host Windows system. We use build inline 
+            # with context .deploy to ship the seed correctly.
+            lines += [
+                "    build:",
+                "      context: .deploy",
+                "      dockerfile_inline: |",
+                f"        FROM {db_image}",
+                "        COPY seed.sql /docker-entrypoint-initdb.d/",
+            ]
+        else:
+            lines += [
+                f"    image: {db_image}",
+            ]
 
         # DB healthchecks allow backend depends_on: service_healthy.
         if db_type in ("postgresql", "postgres"):
@@ -315,14 +330,13 @@ def generate_compose_yaml(
             ]
 
         # Ensure UTF-8 correctness for projects seeding multilingual data.
-        # Without this, MySQL may interpret UTF-8 seed scripts as latin1 and
-        # store mojibake (e.g., Thai text becomes 'à¸...').
         if db_type == "mysql":
             lines += [
                 "    command:",
                 "      - --character-set-server=utf8mb4",
                 "      - --collation-server=utf8mb4_0900_ai_ci",
                 "      - --skip-character-set-client-handshake",
+                "      - --lower_case_table_names=1",
             ]
         elif db_type == "mariadb":
             lines += [
@@ -330,6 +344,7 @@ def generate_compose_yaml(
                 "      - --character-set-server=utf8mb4",
                 "      - --collation-server=utf8mb4_unicode_ci",
                 "      - --skip-character-set-client-handshake",
+                "      - --lower_case_table_names=1",
             ]
 
         lines += [
@@ -350,18 +365,6 @@ def generate_compose_yaml(
                 "    volumes:",
                 f"      - db_data:{db_vol}",
             ]
-
-        if db_init_sql:
-            # Ensure the init script is always mounted, regardless of persistence mode.
-            if not db_ephemeral:
-                # volumes section already started above
-                lines.append(f"      - {db_init_sql}:/docker-entrypoint-initdb.d/seed.sql:ro")
-            else:
-                # tmpfs mode still needs a bind mount for seed.sql
-                lines += [
-                    "    volumes:",
-                    f"      - {db_init_sql}:/docker-entrypoint-initdb.d/seed.sql:ro",
-                ]
 
         lines += [
             "    restart: unless-stopped",

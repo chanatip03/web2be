@@ -73,7 +73,7 @@ def _runtime_dir(submission_id: str) -> Path:
 
 def _compose_project(submission_id: str) -> str:
     """Deterministic compose project name (max 63 chars, lowercase, no dashes at start)."""
-    return f"sub{submission_id[:20]}"
+    return submission_id
 
 
 def _r2_bundle_key(submission_id: str) -> str:
@@ -143,7 +143,8 @@ def _launch_bundle(submission_id: str) -> PreviewSession:
     """Download bundle + docker load + compose up.  Returns updated session."""
     session = _sessions[submission_id]
     runtime = _runtime_dir(submission_id)
-    bundle_path = runtime / "bundle.tar.gz"
+    # Prevent bundle deletion by extract_bundle(..., overwrite=True) which wipes runtime_dir
+    bundle_path = runtime.parent / f"{submission_id}_bundle.tar.gz"
 
     try:
         # 1. Download from R2

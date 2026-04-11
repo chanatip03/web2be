@@ -19,7 +19,7 @@ from app.core.assignment.repository import get_assignment_by_id
 from app.core.classroom.repository import is_classroom_of_teacher
 from app.core.classroommember.repository import is_student_in_classroom
 from app.core.group.repository import get_user_group_by_assignment
-from app.core.security_scan.fs import validate_submission
+from app.core.security_scan.fs import validate_submission, save_result
 from app.core.security_scan.normalizer import normalize_code_result
 from app.core.security_scan.snyk_code import scan_source_code
 from app.core.user.repository import get_student_by_user_id, get_teacher_by_user_id
@@ -555,6 +555,13 @@ async def _run_cyber_scan_step(manifest: SubmissionManifest) -> None:
         raw_result = scan_source_code(source_dir)
         normalized = normalize_code_result(raw_result)
         cyber_path = write_json_artifact(manifest.submission_id, "cyber", "scan.json", normalized)
+        
+        # Save a duplicate to the global RESULTS_DIR so it's visible in the host volume
+        try:
+            save_result(manifest.submission_id, normalized)
+        except Exception:
+            pass
+            
         artifact = register_artifact(
             manifest,
             absolute_path=cyber_path,

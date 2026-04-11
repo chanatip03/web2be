@@ -707,7 +707,7 @@ class DockerBuilder:
             "    if [ -f /usr/share/nginx/html/$c ]; then target=$c; break; fi; \\",
             "  done; \\",
             "  if [ -z \"$target\" ]; then \\",
-            "    first=$(find /usr/share/nginx/html -maxdepth 2 -type f -name '*.html' 2>/dev/null | head -n 1); \\",
+            "    first=$(find /usr/share/nginx/html -maxdepth 2 -type f -name '*.html' \\! -name '50x.html' \\! -name 'index.html' 2>/dev/null | head -n 1); \\",
             "    if [ -n \"$first\" ]; then target=\"${first#/usr/share/nginx/html/}\"; fi; \\",
             "  fi; \\",
             "  if [ -n \"$target\" ]; then \\",
