@@ -61,3 +61,12 @@ class CreateTeacherResponse(BaseModel):
 
     id: int
     email: EmailStr
+
+
+class UpdateUserRequest(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    password: Optional[str] = None
+    academy: Optional[str] = None
+    student_id: Optional[str] = None
