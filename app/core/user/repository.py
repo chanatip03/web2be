@@ -41,3 +41,20 @@ def get_student_by_user_id(db: Session, user_id: int) -> bool:
         Student.user_id == user_id,
         Student.deleted_date.is_(None)
     ).first()
+
+def update_user_and_student_id(db: Session, user_id: int, user_data: dict, student_id: Optional[str] = None):
+    user = db.query(User).filter(User.id == user_id, User.deleted_date.is_(None)).first()
+    if not user:
+        return None
+
+    for key, value in user_data.items():
+        setattr(user, key, value)
+
+    if student_id is not None:
+        student = db.query(Student).filter(Student.user_id == user_id, Student.deleted_date.is_(None)).first()
+        if student:
+            student.student_id = student_id
+
+    db.commit()
+    db.refresh(user)
+    return user

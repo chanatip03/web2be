@@ -23,3 +23,10 @@ def create_user_service(db: Session, role_id: int, first_name: str, last_name: s
     elif(role_id == 2):
         create_teacher_profile(db, user, certificate_url)
     return user
+
+
+def update_user_service(db: Session, user_id: int, user_data: dict, student_id: Optional[str] = None):
+    user = update_user_and_student_id(db, user_id, user_data, student_id)
+    if not user:
+        raise ValueError("User not found or update failed")
+    return user
