@@ -34,6 +34,7 @@ class SubmissionManifest(BaseModel):
     assignment_id: int
     submitted_by_user_id: int
     student_id: int
+    group_id: Optional[int] = None
     project_db_id: Optional[int] = None
     execution_mode: str
     source_type: str
@@ -49,6 +50,7 @@ class SubmissionManifest(BaseModel):
     cyber: Dict[str, Any] = Field(default_factory=dict)
     plagiarism: Dict[str, Any] = Field(default_factory=lambda: {"status": "not_requested"})
     artifacts: List[ArtifactRecord] = Field(default_factory=list)
+    r2_artifacts: Dict[str, Any] = Field(default_factory=dict)
 
 
 def touch_manifest(manifest: SubmissionManifest) -> SubmissionManifest:
@@ -62,6 +64,7 @@ def build_initial_manifest(
     assignment_id: int,
     submitted_by_user_id: int,
     student_id: int,
+    group_id: Optional[int] = None,
     project_db_id: Optional[int],
     execution_mode: str,
     source_type: str,
@@ -85,6 +88,7 @@ def build_initial_manifest(
         assignment_id=assignment_id,
         submitted_by_user_id=submitted_by_user_id,
         student_id=student_id,
+        group_id=group_id,
         project_db_id=project_db_id,
         execution_mode=execution_mode,
         source_type=source_type,
