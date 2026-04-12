@@ -1,7 +1,8 @@
+from fastapi import UploadFile
+from fastapi import File
 from typing import Optional
-
+from fastapi import Form
 from pydantic import BaseModel, ConfigDict, EmailStr
-
 
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -63,10 +64,22 @@ class CreateTeacherResponse(BaseModel):
     email: EmailStr
 
 
-class UpdateUserRequest(BaseModel):
+class UpdateStudentRequest(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     email: Optional[EmailStr] = None
     password: Optional[str] = None
     academy: Optional[str] = None
     student_id: Optional[str] = None
+    image_url: Optional[UploadFile] = File(None)
+
+class UpdateTeacherRequest(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    password: Optional[str] = None
+    academy: Optional[str] = None
+    image_url: Optional[UploadFile] = File(None)
+    is_verify: Optional[bool] = False
+
+

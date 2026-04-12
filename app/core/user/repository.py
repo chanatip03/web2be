@@ -1,7 +1,7 @@
 from typing import Optional
-
-from sqlalchemy.orm import Session
-from app.models.schema import Student, Teacher, User
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.sql import func
+from app.models.schema import Student, Teacher, User, Role
 
 def create_user(db: Session, user: User):
     db.add(user)
@@ -42,19 +42,52 @@ def get_student_by_user_id(db: Session, user_id: int) -> bool:
         Student.deleted_date.is_(None)
     ).first()
 
-def update_user_and_student_id(db: Session, user_id: int, user_data: dict, student_id: Optional[str] = None):
-    user = db.query(User).filter(User.id == user_id, User.deleted_date.is_(None)).first()
-    if not user:
-        return None
+def get_users_by_role(db: Session, role_name: Optional[str] = None):
+    query = db.query(User).join(Role).filter(User.deleted_date.is_(None))
+    if role_name:
+        query = query.filter(Role.name == role_name)
+    return query.all()
 
-    for key, value in user_data.items():
-        setattr(user, key, value)
+def get_user_with_student(db: Session, user_id: int):
+    return db.query(User).options(joinedload(User.student)).filter(
+        User.id == user_id, 
+        User.deleted_date.is_(None)
+    ).first()
 
-    if student_id is not None:
-        student = db.query(Student).filter(Student.user_id == user_id, Student.deleted_date.is_(None)).first()
-        if student:
-            student.student_id = student_id
+def get_user_with_teacher(db: Session, user_id: int):
+    return db.query(User).options(joinedload(User.teacher)).filter(
+        User.id == user_id, 
+        User.deleted_date.is_(None)
+    ).first()
 
+def get_user_by_id(db: Session, user_id: int):
+    return db.query(User).filter(
+        User.id == user_id, 
+        User.deleted_date.is_(None)
+    ).first()
+
+def soft_delete_user(db: Session, user: User):
+    user.deleted_date = func.now()
     db.commit()
     db.refresh(user)
+    return user
+
+def update_student_data(db: Session, user: User, student: Student, user_data: dict, student_id: Optional[str] = None):
+    for key, value in user_data.items():
+        if value is not None:
+            setattr(user, key, value)
+    if student_id is not None:
+        student.student_id = student_id
+    db.commit()
+    db.refresh(user)
+    db.refresh(student)
+    return user
+
+def update_teacher_data(db: Session, user: User, teacher: Teacher, user_data: dict):
+    for key, value in user_data.items():
+        if value is not None:
+            setattr(user, key, value)
+    db.commit()
+    db.refresh(user)
+    db.refresh(teacher)
     return user
