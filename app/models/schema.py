@@ -225,6 +225,15 @@ class Project(Base):
     group = relationship("Group", back_populates="projects")
     submission_of = relationship("SubmissionOf",back_populates="project",cascade="all, delete-orphan")
 
+    @property
+    def students(self):
+        if self.group_id and self.group:
+            return [member.student for member in self.group.members if member.student]
+        elif self.submission_of:
+            submissions = self.submission_of if isinstance(self.submission_of, list) else [self.submission_of]
+            return [so.student for so in submissions if so.student]
+        return []
+
 class Group(Base):
     __tablename__ = "groups"
 
@@ -267,6 +276,7 @@ class SubmissionOf(Base):
 
     project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
+    assignment_id = Column(Integer, ForeignKey("assignments.id", ondelete="CASCADE"), nullable=False)
 
     created_date = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
@@ -276,3 +286,4 @@ class SubmissionOf(Base):
     
     project = relationship("Project", back_populates="submission_of")
     student = relationship("Student", back_populates="submission_of")
+    assignment = relationship("Assignment")

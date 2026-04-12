@@ -234,6 +234,7 @@ def _ensure_submission_runtime_ready(
 def _create_submission_records(
     db: Session,
     *,
+    assignment_id: int,
     student_id: int,
     group_id: Optional[int],
     is_group: bool,
@@ -272,6 +273,7 @@ def _create_submission_records(
             SubmissionOf(
                 project_id=project.id,
                 student_id=student_id,
+                assignment_id=assignment_id,
             )
         )
 
@@ -410,6 +412,7 @@ async def create_submission_service(
 
     project = _create_submission_records(
         db,
+        assignment_id=assignment_id,
         student_id=student.id,
         group_id=resolved_group_id,
         is_group=is_group,

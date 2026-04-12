@@ -158,5 +158,11 @@ def map_user_to_me_response(user: User):
     
 @router.post("/logout")
 async def logout(response: Response):
-    response.delete_cookie("access_token", path="/")
+    response.delete_cookie(
+        key="access_token",
+        path="/",
+        httponly=True,
+        samesite="lax",  
+        secure=False 
+    )
     return {"message": "Logged out"}

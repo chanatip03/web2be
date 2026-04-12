@@ -49,6 +49,28 @@ def send_otp_email(to_email: str, otp: str):
         server.send_message(msg)
 
 
+def send_grading_email(to_email: str, assignment_name: str):
+    msg = MIMEMultipart()
+    msg["From"] = MAIL_FROM or "no-reply@example.com"
+    msg["To"] = to_email
+    msg["Subject"] = "Project Graded Notification"
+
+    body = f"""
+Your submission of {assignment_name} has been updated.
+Please check in WEB2.
+"""
+    msg.attach(MIMEText(body, "plain"))
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.send_message(msg)
+    except Exception as e:
+        print(f"Failed to send grading email to {to_email}: {e}")
+
 def save_otp_memory(email: str, otp_hash: str, payload: dict, ttl_minutes: int = 5):
     otp_store[email] = {
         "otp": otp_hash,
