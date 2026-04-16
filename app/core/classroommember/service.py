@@ -61,7 +61,4 @@ def delete_classroom_member_service(db: Session, classroom_id: int, student_id: 
         raise ValueError("Student is not in the classroom")
 
     member = delete_classroom_member(db, classroom_id, student_id)
-    if not member:
-        raise ValueError("Classroom member not found")
-
     return member
