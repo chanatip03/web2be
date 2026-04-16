@@ -227,6 +227,28 @@ class DockerClient:
 
         subprocess.run(cmd, cwd=project_dir, capture_output=True, timeout=60)
 
+    def compose_stop(
+        self,
+        project_dir: str,
+        project_name: str | None = None,
+    ) -> None:
+        import subprocess
+
+        cmd = ["docker", "compose"]
+        if project_name:
+            cmd += ["-p", project_name]
+        cmd += ["stop"]
+
+        result = subprocess.run(
+            cmd,
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            raise DockerError(f"docker compose stop failed:\n{result.stderr}")
+
     def get_compose_logs(
         self, project_dir: str, project_name: str | None = None, tail: int = 200,
     ) -> str:

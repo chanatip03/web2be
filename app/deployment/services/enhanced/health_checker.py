@@ -16,6 +16,19 @@ logger = logging.getLogger(__name__)
 class HealthChecker:
     """Check health of deployed containers."""
 
+    @staticmethod
+    def _calc_memory_usage_mb(memory_stats: Dict[str, Any]) -> float:
+        stats = memory_stats.get("stats", {}) or {}
+        usage = float(memory_stats.get("usage") or 0)
+        inactive_file = stats.get("inactive_file")
+        if inactive_file is None:
+            inactive_file = stats.get("total_inactive_file")
+
+        if inactive_file is not None:
+            usage = max(0.0, usage - float(inactive_file))
+
+        return round(usage / (1024 * 1024), 1)
+
     async def check_container(self, container_id: str) -> Dict[str, Any]:
         """Full health check for a single container."""
         result: Dict[str, Any] = {
@@ -43,7 +56,7 @@ class HealthChecker:
             mem = stats.get("memory_stats", {})
             result["resource_usage"] = {
                 "cpu_percent": round(cpu, 2),
-                "memory_usage_mb": round(mem.get("usage", 0) / (1024 * 1024), 1),
+                "memory_usage_mb": self._calc_memory_usage_mb(mem),
                 "memory_limit_mb": round(mem.get("limit", 0) / (1024 * 1024), 1),
             }
         except Exception:

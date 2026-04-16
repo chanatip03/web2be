@@ -26,14 +26,17 @@ services:
     ports:
       - "8000:8000"
     volumes:
+      - ./runtime_server.db:/app/runtime_server.db
       - ./data/submissions:/app/data/submissions
       - ./data/security_scan_results:/app/data/security_scan_results
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./data/projects:/app/app/deployment/data/projects
+      - ./app/deployment/data/projects:/app/app/deployment/data/projects
+      - ./app/deployment/data/deployments:/app/app/deployment/data/deployments
     environment:
       SNYK_TOKEN: ${SNYK_TOKEN}
       SUBMISSIONS_DIR: /app/data/submissions
       RESULTS_DIR: /app/data/security_scan_results
+      DOCKER_HOST: unix:///var/run/docker.sock
 
       DATABASE_HOST: database
       DATABASE_PORT: 5432

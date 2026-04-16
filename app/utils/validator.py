@@ -18,8 +18,11 @@ def get_current_user(
 
     try:
         payload = decode_token(token)
-        user_id = payload.get("userId")
+        user_id = payload.get("userId") or payload.get("sub")
         user_role = payload.get("role")
+
+        if not user_role and payload.get("type") == "admin":
+            user_role = "admin"
 
         if not user_id or not user_role:
             raise HTTPException(status_code=401, detail="Invalid token")

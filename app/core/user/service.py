@@ -91,4 +91,4 @@ def soft_delete_user_service(db: Session, current_user: dict, user_id: int):
     if not user:
         raise ValueError("User not found")
     soft_delete_user(db, user)
-    return True
+    return True
