@@ -28,6 +28,7 @@ class SubmissionAcceptedResponse(BaseModel):
     assignment_id: int
     execution_mode: str
     pipeline_status: str
+    is_late: bool = False
     status_url: str
     artifact_list_url: str
 

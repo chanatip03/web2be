@@ -217,6 +217,7 @@ class Project(Base):
     cybersecurity_result = Column(String, nullable=True)
     score = Column(Integer, nullable=True)
     feedback = Column(String, nullable=True)
+    is_late = Column(Boolean, default=False, nullable=False)
 
     created_date = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_date = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

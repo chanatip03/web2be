@@ -108,7 +108,13 @@ def _coerce_utc(value: datetime | None) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
-def _validate_assignment_availability(assignment) -> None:
+def _validate_assignment_availability(assignment) -> bool:
+    """Validate the assignment is accessible and return True if the submission is late.
+
+    Raises HTTP 404 if the assignment is deleted.
+    Raises HTTP 403 if the assignment has not opened yet.
+    Returns True if the due_date has passed (late submission), False otherwise.
+    """
     if assignment.deleted_date is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
     now = datetime.now(timezone.utc)
@@ -117,8 +123,12 @@ def _validate_assignment_availability(assignment) -> None:
 
     if start_date and now < start_date:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Assignment has not opened yet")
+
+    # Past due_date → allow submission but flag as late
     if due_date and now > due_date:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Assignment is already closed")
+        return True
+
+    return False
 
 
 def _set_step_running(manifest: SubmissionManifest, step_name: str, **details) -> SubmissionManifest:
@@ -242,6 +252,7 @@ def _create_submission_records(
     source_ref: str | None,
     env: str | None,
     execution_mode: str,
+    is_late: bool = False,
 ) -> Project:
     """Create Project and conditionally SubmissionOf.
 
@@ -263,6 +274,7 @@ def _create_submission_records(
         submission_type=submission_type,
         project_source_url=initial_source_url,
         env=env or execution_mode,
+        is_late=is_late,
     )
     db.add(project)
     db.flush()
@@ -360,7 +372,7 @@ async def create_submission_service(
     if not assignment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
 
-    _validate_assignment_availability(assignment)
+    is_late = _validate_assignment_availability(assignment)
 
     if not is_student_in_classroom(db, assignment.classroom_id, student.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Student is not in the assignment classroom")
@@ -420,6 +432,7 @@ async def create_submission_service(
         source_ref=source_ref,
         env=payload.env,
         execution_mode=execution_mode,
+        is_late=is_late,
     )
 
     manifest = build_initial_manifest(
@@ -434,6 +447,7 @@ async def create_submission_service(
         source_ref=source_ref,
         env=payload.env,
         testcase_source_url=assignment.testcase_url,
+        is_late=is_late,
     )
 
     if upload_file:
@@ -456,6 +470,7 @@ async def create_submission_service(
         assignment_id=assignment_id,
         execution_mode=execution_mode,
         pipeline_status=manifest.pipeline_status,
+        is_late=is_late,
         status_url=f"/api/submission/{submission_id}",
         artifact_list_url=f"/api/submission/{submission_id}/artifacts",
     )
