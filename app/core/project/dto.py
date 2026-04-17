@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel, ConfigDict
 from app.models.schema import SubmissionTypeEnum
@@ -15,6 +16,8 @@ class ProjectResponse(BaseModel):
     cybersecurity_result: Optional[str] = None
     score: Optional[int] = None
     feedback: Optional[str] = None
+    is_late: bool = False
+    created_date: Optional[datetime] = None
     
     students: List[StudentResponse] = []
 
