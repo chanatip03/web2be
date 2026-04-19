@@ -78,11 +78,7 @@ class Student(Base):
     user = relationship("User", back_populates="student")
     classrooms = relationship("ClassroomMember", back_populates="student")
     group_members = relationship("GroupMember", back_populates="student")
-    submission_of = relationship(
-    "SubmissionOf",
-    back_populates="student",
-    cascade="all, delete-orphan"
-)
+    projects = relationship("Project", back_populates="student")
 
 class Teacher(Base):
     __tablename__ = "teachers"
@@ -208,10 +204,13 @@ class Project(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=True)
+    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=True)
 
     submission_type = Column(Enum(SubmissionTypeEnum, name="submission_type_enum"), nullable=False)
     project_source_url = Column(String, nullable=True)
     env = Column(String, nullable=False)
+    container_id = Column(String, nullable=True)
+    container_resource = Column(String, nullable=True)
 
     testcase_result = Column(String, nullable=True)
     cybersecurity_result = Column(String, nullable=True)
@@ -223,15 +222,12 @@ class Project(Base):
     deleted_date = Column(DateTime(timezone=True), nullable=True)
     
     group = relationship("Group", back_populates="projects")
-    submission_of = relationship("SubmissionOf",back_populates="project",cascade="all, delete-orphan")
+    student = relationship("Student", back_populates="projects")
 
     @property
     def students(self):
         if self.group_id and self.group:
             return [member.student for member in self.group.members if member.student]
-        elif self.submission_of:
-            submissions = self.submission_of if isinstance(self.submission_of, list) else [self.submission_of]
-            return [so.student for so in submissions if so.student]
         return []
 
 class Group(Base):
@@ -268,22 +264,3 @@ class GroupMember(Base):
     __table_args__ = (
         UniqueConstraint("group_id", "student_id", name="uq_group_student"),
     )
-    
-class SubmissionOf(Base):
-    __tablename__ = "submission_of"
-
-    id = Column(Integer, primary_key=True, index=True)
-
-    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
-    assignment_id = Column(Integer, ForeignKey("assignments.id", ondelete="CASCADE"), nullable=False)
-
-    created_date = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-
-    __table_args__ = (
-        UniqueConstraint("project_id", "student_id", name="uq_project_student"),
-    )
-    
-    project = relationship("Project", back_populates="submission_of")
-    student = relationship("Student", back_populates="submission_of")
-    assignment = relationship("Assignment")

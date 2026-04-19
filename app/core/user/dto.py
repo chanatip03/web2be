@@ -64,22 +64,68 @@ class CreateTeacherResponse(BaseModel):
     email: EmailStr
 
 
-class UpdateStudentRequest(BaseModel):
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    email: Optional[EmailStr] = None
-    password: Optional[str] = None
-    academy: Optional[str] = None
-    student_id: Optional[str] = None
-    image_url: Optional[UploadFile] = File(None)
+class UpdateStudentRequest:
+    def __init__(
+        self,
+        first_name: Optional[str] = Form(None),
+        last_name: Optional[str] = Form(None),
+        email: Optional[str] = Form(None),
+        password: Optional[str] = Form(None),
+        academy: Optional[str] = Form(None),
+        student_id: Optional[str] = Form(None),
+        image_url: Optional[UploadFile] = File(None),
+    ):
+        self.first_name = first_name
+        self.last_name = last_name
+        self.email = email
+        self.password = password
+        self.academy = academy
+        self.student_id = student_id
+        self.image_url = image_url
 
-class UpdateTeacherRequest(BaseModel):
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    email: Optional[EmailStr] = None
-    password: Optional[str] = None
-    academy: Optional[str] = None
-    image_url: Optional[UploadFile] = File(None)
-    is_verify: Optional[bool] = False
+    def dict(self, exclude_unset: bool = False):
+        data = {
+            "first_name": self.first_name,
+            "last_name": self.last_name,
+            "email": self.email,
+            "password": self.password,
+            "academy": self.academy,
+            "student_id": self.student_id,
+            "image_url": self.image_url,
+        }
+        if exclude_unset:
+            return {k: v for k, v in data.items() if v is not None}
+        return data
+
+
+class UpdateTeacherRequest:
+    def __init__(
+        self,
+        first_name: Optional[str] = Form(None),
+        last_name: Optional[str] = Form(None),
+        email: Optional[str] = Form(None),
+        password: Optional[str] = Form(None),
+        academy: Optional[str] = Form(None),
+        image_url: Optional[UploadFile] = File(None),
+    ):
+        self.first_name = first_name
+        self.last_name = last_name
+        self.email = email
+        self.password = password
+        self.academy = academy
+        self.image_url = image_url
+
+    def dict(self, exclude_unset: bool = False):
+        data = {
+            "first_name": self.first_name,
+            "last_name": self.last_name,
+            "email": self.email,
+            "password": self.password,
+            "academy": self.academy,
+            "image_url": self.image_url,
+        }
+        if exclude_unset:
+            return {k: v for k, v in data.items() if v is not None}
+        return data
 
 
