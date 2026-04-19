@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -51,6 +51,9 @@ class ProjectAnalysis(BaseModel):
     is_static_site: bool = False
     deployment_strategy: str = "docker"
     summary: str = ""
+    api_endpoints: List[Dict[str, Any]] = Field(default_factory=list)
+    ui_elements: List[Dict[str, Any]] = Field(default_factory=list)
+    summary_dict: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("project_type", mode="before")
     @classmethod

@@ -30,6 +30,9 @@ services:
       - ./data/security_scan_results:/app/data/security_scan_results
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data/projects:/app/app/deployment/data/projects
+      - ./data/deployments:/app/app/deployment/data/deployments
+      - ./data/.meta:/app/app/deployment/data/.meta
+      - ./app:/app/app
     environment:
       SNYK_TOKEN: ${SNYK_TOKEN}
       SUBMISSIONS_DIR: /app/data/submissions

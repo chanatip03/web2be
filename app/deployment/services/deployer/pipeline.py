@@ -22,6 +22,7 @@ from app.deployment.models.deployment import DeploymentConfig, DeploymentStatus
 from app.deployment.models.project import ProjectMetadata
 from app.deployment.services.analyzer.file_scanner import build_file_tree
 from app.deployment.services.analyzer.project_analyzer import analyze_project
+from app.deployment.services.analyzer.swagger_generator import generate_openapi_spec
 from app.deployment.services.docker.builder import docker_builder
 from app.deployment.services.deployer.error_taxonomy import classify_deploy_error
 from app.deployment.services.enhanced.metrics_collector import metrics
@@ -86,7 +87,7 @@ async def _publish(deployment_id: str, step: str, message: str):
 
 # ── Analysis (background) ───────────────────────────────────────
 
-async def run_analysis(project_id: str, project_path: str) -> None:
+async def run_analysis(project_id: str, project_path: str, execution_mode: str | None = None) -> None:
     """Analyse a project in the background and store results."""
     from app.deployment.services.llm.client import set_active_project
     set_active_project(project_id)
@@ -104,7 +105,7 @@ async def run_analysis(project_id: str, project_path: str) -> None:
         t0 = time.perf_counter()
 
         async with _get_llm_lock():
-            analysis = await analyze_project(project_path)
+            analysis = await analyze_project(project_path, hint_type=execution_mode)
 
         duration = time.perf_counter() - t0
         metrics.record_duration("analysis", duration)
@@ -185,7 +186,7 @@ async def run_deployment(deployment_id: str, project_id: str, deploy_mode: str |
                 "analyse", "Running project analysis", "running", deployment_id
             )
 
-            await run_analysis(project_id, str(project_path))
+            await run_analysis(project_id, str(project_path), execution_mode=deploy_mode)
             project = project_store.get(project_id)
             if not project or not project.analysis:
                 raise DeployError("Project analysis failed")
@@ -276,6 +277,35 @@ async def run_deployment(deployment_id: str, project_id: str, deploy_mode: str |
 
         deployment.updated_at = datetime.now()
         deployment_store.save(deployment)
+        
+        # Step 1.1: Generate Swagger if needed
+        try:
+            summary = project.analysis.summary_dict
+            logger.info(f"Swagger check for {deployment_id}: summary={summary}, mode={deploy_mode}")
+            # Ensure we always generate Swagger for backend-only projects, 
+            # even if no specific endpoints were detected (uses the default fallback).
+            if (deployment.deploy_mode == "backend-only" and 
+                not summary.get("has_existing_docs", False)):
+                
+                logger.info(f"Triggering Swagger generation for {deployment_id} with {len(project.analysis.api_endpoints)} endpoints")
+                spec = generate_openapi_spec(
+                    project.analysis.api_endpoints, 
+                    project_name=project.name or "Project API"
+                )
+                logger.debug(f"Swagger spec generated for {deployment_id}: {list(spec.get('paths', {}).keys())}")
+                
+                # Save to deployment folder
+                deploy_dir = Path(settings.deployments_dir) / deployment_id
+                deploy_dir.mkdir(parents=True, exist_ok=True)
+                swagger_path = deploy_dir / "openapi.json"
+                
+                import json
+                swagger_path.write_text(json.dumps(spec, indent=2), encoding="utf-8")
+                
+                logger.info(f"Generated Swagger spec for {deployment_id} at {swagger_path}")
+        except Exception as sw_exc:
+            logger.exception("Swagger generation failed for %s", deployment_id)
+            proj_logger.warning(f"Swagger generation failed: {sw_exc}")
 
         # Step 4: Acceptance checks — verify containers are actually serving
         deployment.current_step = 4
@@ -293,6 +323,7 @@ async def run_deployment(deployment_id: str, project_id: str, deploy_mode: str |
         )
 
         if acceptance_result.get("passed", False):
+            deployment.status = "success"
             proj_logger.log_pipeline_step(
                 "verify",
                 f"Acceptance passed — {acceptance_result.get('message', '')}",
@@ -305,18 +336,40 @@ async def run_deployment(deployment_id: str, project_id: str, deploy_mode: str |
                 for svc, info in acceptance_result.get("services", {}).items()
                 if info.get("status") != "healthy"
             ]
-            proj_logger.log_pipeline_step(
-                "verify",
-                f"Acceptance partial — container is up but HTTP checks failed: {failed}",
-                "done",
-                deployment_id,
-            )
-            logger.warning("Acceptance failed for %s but container is up: %s", deployment_id, failed)
+            # If at least some services are reachable (tcp_ok or healthy), we consider it 'success' but warn
+            any_reachable = any(info.get("status") in {"healthy", "degraded"} for info in acceptance_result.get("services", {}).items())
+            
+            if any_reachable:
+                deployment.status = "success"
+                proj_logger.log_pipeline_step(
+                    "verify",
+                    f"Acceptance partial — container is up but HTTP checks failed: {failed}",
+                    "done",
+                    deployment_id,
+                )
+            else:
+                deployment.status = "error"
+                proj_logger.log_pipeline_step(
+                    "verify",
+                    f"Acceptance failed — container unreachable: {failed}",
+                    "error",
+                    deployment_id,
+                )
+            
+            logger.warning("Acceptance result for %s: %s", deployment_id, acceptance_result)
 
         # Step 5: Success + Bundle
-        deployment.status = "success"
-        deployment.current_step = 5
-        deployment.updated_at = datetime.now()
+        # Set API/Swagger URL for backend/fullstack projects
+        if deployment.deploy_mode in ("backend-only", "fullstack"):
+            swagger_path = Path(settings.deployments_dir) / deployment_id / "openapi.json"
+            if swagger_path.exists():
+                # Point to our internal swagger UI route
+                deployment.api_url = f"/api/deployments/{deployment_id}/swagger"
+            elif project.analysis.summary_dict.get("has_existing_docs"):
+                # If they have their own, maybe try to guess. 
+                # For now, we'll just leave it or try well-known paths.
+                pass
+
         deployment_store.save(deployment)
 
         # Generate .env if project doesn't have one (LLM-only mode)
@@ -390,6 +443,9 @@ async def run_deployment(deployment_id: str, project_id: str, deploy_mode: str |
             "done",
             deployment_id,
         )
+        deployment.status = "success"
+        deployment_store.save(deployment)
+
         await _publish(deployment_id, "success", f"Deployed! Preview: {deployment.preview_url}")
         logger.info("Deployment %s succeeded: %s", deployment_id, deployment.preview_url)
 

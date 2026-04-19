@@ -1095,7 +1095,21 @@ def _find_deployment(project_id: str):
     updated successful deployment. This avoids routing to stale ports when a
     project has multiple historical "success" records.
     """
+    # 1. Check standard deployment store
     all_deps = [dep for dep in deployment_store.list_all() if dep.project_id == project_id]
+    
+    # 2. Check submission preview sessions (in-memory)
+    # We use a local import to avoid circular dependencies in __init__.py
+    try:
+        from app.deployment.api.submission_preview import _sessions
+        session = _sessions.get(project_id)
+        if session and session.status == "running":
+            # Session exists and is running. We return it as a "duck typed" deployment.
+            # It has project_id, status, preview_url, and service_ports.
+            return session
+    except ImportError:
+        pass
+
     if not all_deps:
         return None
 
@@ -1122,8 +1136,11 @@ def _get_service_url(deployment, service: Optional[str] = None) -> Optional[str]
     if service:
         if deployment.service_ports:
             for sp in deployment.service_ports:
-                if sp.service == service:
-                    return sp.url
+                # Handle both ServicePortMapping (Pydantic) and Dict (Session)
+                s_name = getattr(sp, "service", None) or (sp.get("service") if isinstance(sp, dict) else None)
+                s_url = getattr(sp, "url", None) or (sp.get("url") if isinstance(sp, dict) else None)
+                if s_name == service:
+                    return s_url
 
         # Metadata can be stale after restart; recover from compose runtime.
         recovered = _resolve_service_url_from_compose(deployment, service)

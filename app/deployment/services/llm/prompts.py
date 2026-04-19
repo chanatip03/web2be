@@ -64,6 +64,10 @@ CRITICAL — Version Detection Rules:
 """
 
 ANALYSIS_USER = """\
+## Intent Hint
+The user expects this project to be: **{hint_type}**
+(Please prioritize this type unless the file structure clearly contradicts it)
+
 ## File tree
 {file_tree}
 

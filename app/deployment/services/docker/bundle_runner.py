@@ -15,6 +15,7 @@ import re
 import shutil
 import tarfile
 from pathlib import Path
+import socket
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.deployment.core.exceptions import DockerError
@@ -60,6 +61,10 @@ def run_from_bundle(
             pass
 
     logger.info("Bundle run: docker compose up -d (%s)", compose_project)
+    
+    # Patch docker-compose.yml to use fresh free ports to avoid allocation conflicts
+    _patch_compose_ports(runtime_dir)
+    
     docker_client.compose_up(str(runtime_dir), compose_project, build=False)
 
     compose_text = compose_file.read_text(encoding="utf-8", errors="replace")
@@ -146,3 +151,39 @@ def _pick_primary_url(service_ports: List[Dict[str, Any]]) -> Optional[str]:
         if pref in by_service:
             return by_service[pref]
     return next(iter(by_service.values()), None)
+
+
+def _find_free_port() -> int:
+    """Find an available host port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+def _patch_compose_ports(runtime_dir: Path) -> None:
+    """Replace hardcoded host ports in docker-compose.yml with fresh free ports."""
+    compose_path = runtime_dir / "docker-compose.yml"
+    if not compose_path.exists():
+        return
+
+    content = compose_path.read_text(encoding="utf-8")
+    
+    # Pattern to match "host_port:container_port" in compose files
+    # We look for lines like: - "33509:8000" or - 80:80
+    port_pattern = re.compile(r'(\s*-\s*["\']?)(\d+):(\d+)(["\']?\s*)')
+    
+    def replacer(match):
+        prefix = match.group(1)
+        # host_port = match.group(2) # we ignore the baked-in host port
+        container_port = match.group(3)
+        suffix = match.group(4)
+        
+        new_host_port = _find_free_port()
+        logger.info(f"Re-mapped container port {container_port} to host port {new_host_port}")
+        return f"{prefix}{new_host_port}:{container_port}{suffix}"
+
+    new_content = port_pattern.sub(replacer, content)
+    
+    if new_content != content:
+        compose_path.write_text(new_content, encoding="utf-8")
+        logger.info(f"Patched {compose_path.name} with fresh host ports")

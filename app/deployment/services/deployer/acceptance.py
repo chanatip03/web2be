@@ -97,6 +97,7 @@ async def run_acceptance_checks(
 
         for svc, result in zip(tasks.keys(), probe_results):
             if isinstance(result, Exception):
+                logger.error(f"Probe error for {svc}: {result}")
                 results[svc] = {"status": "error", "error": str(result)}
                 continue
 
@@ -168,9 +169,13 @@ async def _probe_service(
                         "url": url,
                         "path": path,
                     }
-            except (httpx.ConnectError, httpx.TimeoutException):
+                else:
+                    logger.debug(f"Probe {url} returned {resp.status_code} (unhealthy)")
+            except (httpx.ConnectError, httpx.TimeoutException) as exc:
+                logger.debug(f"Probe {url} failed: {type(exc).__name__}")
                 continue
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Probe {url} unexpected error: {exc}")
                 continue
 
     parsed = urlparse(base)

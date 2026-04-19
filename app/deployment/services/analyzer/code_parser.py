@@ -6,10 +6,13 @@ React/Vue (JSX/TSX), HTML. Ported from v1 with sync I/O for v3 consistency.
 from __future__ import annotations
 
 import ast
+import logging
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -69,24 +72,38 @@ class CodeParser:
         self.components: List[Component] = []
         self.routes: List[str] = []
         self.route_prefix_map: Dict[str, str] = {}
+        self.has_existing_docs: bool = False
+        self.go_structs: Dict[str, List[str]] = {}
+        self.go_handlers: Dict[str, List[str]] = {}
 
     # ──────────────────────────────────────────────────────────────
     # Public API
     # ──────────────────────────────────────────────────────────────
+
+    def _is_ignored(self, fp: Path) -> bool:
+        """Check if a file path should be ignored (e.g. node_modules, venv)."""
+        parts = fp.parts
+        for d in _IGNORE_DIRS:
+            if d in parts:
+                return True
+        return False
 
     def parse_project(self) -> Dict[str, Any]:
         """Parse the entire project directory and return summary."""
 
         # JS/TS/JSX/TSX/Vue
         for ext in (".js", ".jsx", ".ts", ".tsx", ".vue"):
-            for fp in self.project_path.rglob(f"*{ext}"):
-                if self._should_ignore(fp):
+            found_files = list(self.project_path.rglob(f"*{ext}"))
+            if found_files:
+                logger.info("CodeParser: Found %d files with extension %s", len(found_files), ext)
+            for fp in found_files:
+                if self._is_ignored(fp):
                     continue
                 self._parse_frontend_file(fp)
 
         # Python
         for fp in self.project_path.rglob("*.py"):
-            if self._should_ignore(fp):
+            if self._is_ignored(fp):
                 continue
             self._parse_python_file(fp)
 
@@ -95,15 +112,46 @@ class CodeParser:
 
         # Java
         for fp in self.project_path.rglob("*.java"):
-            if self._should_ignore(fp):
+            if self._is_ignored(fp):
                 continue
             self._parse_java_file(fp)
 
         # HTML
         for fp in self.project_path.rglob("*.html"):
-            if self._should_ignore(fp):
+            if self._is_ignored(fp):
                 continue
             self._parse_html_file(fp)
+
+        # Rust
+        for fp in self.project_path.rglob("*.rs"):
+            if self._is_ignored(fp):
+                continue
+            self._parse_rust_file(fp)
+
+        # PHP
+        for fp in self.project_path.rglob("*.php"):
+            if self._is_ignored(fp):
+                continue
+            self._parse_php_file(fp)
+
+        # Go - Multi-pass
+        go_files = [f for f in self.project_path.rglob("*.go") if not self._is_ignored(f)]
+        if go_files:
+            logger.info("CodeParser: Processing %d .go files", len(go_files))
+            # Pass 1: Extract Structs
+            for fp in go_files:
+                self._scan_go_structs(fp)
+            # Pass 2: Extract Handlers
+            for fp in go_files:
+                self._scan_go_handlers(fp)
+            # Pass 3: Extract Routes
+            for fp in go_files:
+                self._parse_go_file(fp)
+
+        logger.info("CodeParser: Final count - Endpoints: %d, UI: %d", len(self.api_endpoints), len(self.ui_elements))
+
+
+        self._detect_existing_docs()
 
         # Cap to avoid huge payloads
         ui_cap, ep_cap, comp_cap, route_cap = 200, 250, 250, 250
@@ -113,9 +161,9 @@ class CodeParser:
         routes = self.routes[:route_cap]
 
         return {
-            "ui_elements": [e.to_dict() for e in ui],
-            "api_endpoints": [e.to_dict() for e in eps],
-            "components": [c.to_dict() for c in comps],
+            "ui_elements": [asdict(e) for e in ui],
+            "api_endpoints": [asdict(e) for e in eps],
+            "components": [asdict(c) for c in comps],
             "routes": routes,
             "summary": {
                 "total_ui_elements": len(self.ui_elements),
@@ -125,6 +173,7 @@ class CodeParser:
                 "total_api_endpoints": len(self.api_endpoints),
                 "total_components": len(self.components),
                 "total_routes": len(self.routes),
+                "has_existing_docs": self.has_existing_docs,
                 "capped_endpoints": max(0, len(self.api_endpoints) - ep_cap),
             },
         }
@@ -147,7 +196,7 @@ class CodeParser:
         for fp in self.project_path.rglob("*"):
             if fp.suffix not in {".js", ".ts", ".jsx", ".tsx"}:
                 continue
-            if self._should_ignore(fp):
+            if self._is_ignored(fp):
                 continue
             try:
                 text = fp.read_text(encoding="utf-8", errors="ignore")
@@ -646,9 +695,225 @@ class CodeParser:
                     return s
         return ""
 
-    def _should_ignore(self, path: Path) -> bool:
-        parts = set(path.parts)
-        return bool(parts & _IGNORE_DIRS)
+    # ──────────────────────────────────────────────────────────────
+    # Rust (Actix, Rocket, Axum)
+    # ──────────────────────────────────────────────────────────────
+
+    def _parse_rust_file(self, fp: Path) -> None:
+        try:
+            content = fp.read_text(encoding="utf-8", errors="ignore")
+            relative = str(fp.relative_to(self.project_path))
+            # Rocket/Actix attributes: #[get("/path")]
+            pat = re.compile(r'#\[(get|post|put|delete|patch)\s*\(\s*["\']([^"\']+)["\']', re.IGNORECASE)
+            for m in pat.finditer(content):
+                method = m.group(1).upper()
+                path = m.group(2)
+                line_number = content.count("\n", 0, m.start()) + 1
+                self.api_endpoints.append(APIEndpoint(
+                    method=method,
+                    path=path,
+                    function_name=f"rust_{method.lower()}_{path.strip('/').replace('/', '_') or 'root'}",
+                    file_path=relative,
+                    line_number=line_number
+                ))
+            # Axum-style: .route("/path", get(handler))
+            axum_pat = re.compile(r'\.route\s*\(\s*["\']([^"\']+)["\']\s*,\s*(get|post|put|delete|patch)', re.IGNORECASE)
+            for m in axum_pat.finditer(content):
+                path = m.group(1)
+                method = m.group(2).upper()
+                line_number = content.count("\n", 0, m.start()) + 1
+                self.api_endpoints.append(APIEndpoint(
+                    method=method,
+                    path=path,
+                    function_name=f"axum_{method.lower()}_{path.strip('/').replace('/', '_') or 'root'}",
+                    file_path=relative,
+                    line_number=line_number
+                ))
+        except Exception:
+            pass
+
+    # ──────────────────────────────────────────────────────────────
+    # PHP (Laravel, Slim)
+    # ──────────────────────────────────────────────────────────────
+
+    def _parse_php_file(self, fp: Path) -> None:
+        try:
+            content = fp.read_text(encoding="utf-8", errors="ignore")
+            relative = str(fp.relative_to(self.project_path))
+            # Laravel: Route::get('/path', ...)
+            pat = re.compile(r'Route::(get|post|put|delete|patch)\s*\(\s*["\']([^"\']+)["\']', re.IGNORECASE)
+            for m in pat.finditer(content):
+                method = m.group(1).upper()
+                path = m.group(2)
+                line_number = content.count("\n", 0, m.start()) + 1
+                self.api_endpoints.append(APIEndpoint(
+                    method=method,
+                    path=path,
+                    function_name=f"php_{method.lower()}_{path.strip('/').replace('/', '_') or 'root'}",
+                    file_path=relative,
+                    line_number=line_number
+                ))
+        except Exception:
+            pass
+
+    # ──────────────────────────────────────────────────────────────
+    # Go (Gin, Echo, Fiber)
+    # ──────────────────────────────────────────────────────────────
+
+        except Exception:
+            pass
+
+    def _scan_go_structs(self, fp: Path) -> None:
+        """Pass 1 for Go: extract structs."""
+        try:
+            content = fp.read_text(encoding="utf-8", errors="ignore")
+            struct_pat = re.compile(r'type\s+([A-Z][a-zA-Z0-9_]*)\s+struct\s*\{([\s\S]*?)\}', re.MULTILINE)
+            for m in struct_pat.finditer(content):
+                name = m.group(1)
+                body = m.group(2)
+                fields = re.findall(r'json:"([^",]+)"', body)
+                if not fields:
+                    fields = re.findall(r'^\s*([A-Z][a-zA-Z0-9_]*)\s+[a6-z0-9]', body, re.MULTILINE)
+                self.go_structs[name] = fields
+        except Exception:
+            pass
+
+    def _scan_go_handlers(self, fp: Path) -> None:
+        """Pass 2 for Go: map handlers to structs."""
+        try:
+            content = fp.read_text(encoding="utf-8", errors="ignore")
+            handlers_in_file = re.findall(r'func\s+([a-zA-Z0-9_]+)\s*\([^)]*\*?(?:gin\.Context|echo\.Context|fiber\.Ctx)\s*\)', content)
+            
+            # Look for BindJSON calls and the struct they use
+            bindings = re.findall(r'var\s+[a-zA-Z0-9_]+\s+(?:[a-zA-Z0-9_]+\.)?([A-Z][a-zA-Z0-9_]*)[\s\S]*?Bind(?:JSON|YAML|XML|Query|Form)?', content)
+            direct_bindings = re.findall(r'Bind(?:JSON|YAML|XML|Query|Form)?\(&?(?:[a-zA-Z0-9_]+\.)?([A-Z][a-zA-Z0-9_]*)', content)
+            
+            all_detected_structs = list(set(bindings + direct_bindings))
+            
+            for h_name in handlers_in_file:
+                for s_name in all_detected_structs:
+                    if s_name in self.go_structs:
+                        self.go_handlers[h_name] = self.go_structs[s_name]
+                        break
+        except Exception:
+            pass
+
+    def _parse_go_file(self, fp: Path) -> None:
+        try:
+            content = fp.read_text(encoding="utf-8", errors="ignore")
+            relative = str(fp.relative_to(self.project_path))
+            
+            # 1. Swag/Swagger comments: // @Router /api/v1/user [get]
+            swagger_pat = re.compile(r'//\s*@Router\s+([^\s\[]+)\s+\[([a-z,]+)\]', re.IGNORECASE)
+            for m in swagger_pat.finditer(content):
+                path = m.group(1)
+                methods = m.group(2).upper().split(",")
+                line_number = content.count("\n", 0, m.start()) + 1
+                path_params = re.findall(r'\{([^}]+)\}', path) or re.findall(r':([a-zA-Z0-9_]+)', path)
+                for method in methods:
+                    self.api_endpoints.append(APIEndpoint(
+                        method=method.strip(),
+                        path=path,
+                        function_name=f"go_swag_{method.lower()}_{path.strip('/').replace('/', '_').replace(':', '') or 'root'}",
+                        path_params=path_params,
+                        file_path=relative,
+                        line_number=line_number
+                    ))
+
+            # 2. Frameworks (Gin, Echo, Chi, Fiber)
+            # Find .METHOD("/path", HandlerFunc)
+            patterns = [
+                # .GET("/path", Handler)
+                r'\.(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD|HandleFunc|Handle|HandlerFunc)\s*\(\s*["\']([^"\']+)["\']\s*,\s*(?:[a-zA-Z0-9_]+\.)?([a-zA-Z0-9_]+)',
+                # .Method("GET", "/path", Handler)
+                r'\.(Method|MethodFunc|HandlerFunc)\s*\(\s*["\'](GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD|ANY)["\']\s*,\s*["\']([^"\']+)["\']\s*,\s*(?:[a-zA-Z0-9_]+\.)?([a-zA-Z0-9_]+)',
+            ]
+            
+            for pat_str in patterns:
+                pat = re.compile(pat_str, re.IGNORECASE)
+                for m in pat.finditer(content):
+                    line_number = content.count("\n", 0, m.start()) + 1
+                    if len(m.groups()) == 3:
+                        m_type, path, handler_name = m.group(1).upper(), m.group(2), m.group(3)
+                    elif len(m.groups()) == 4:
+                        m_type, path, handler_name = m.group(2).upper(), m.group(3), m.group(4)
+                    else: continue
+
+                    if m_type in ("HANDLEFUNC", "HANDLE", "HANDLERFUNC"): m_type = "GET"
+                    path_params = re.findall(r':([a-zA-Z0-9_]+)', path)
+                    
+                    # Link to detected body fields from Pass 1
+                    body_fields = self.go_handlers.get(handler_name, [])
+                    
+                    self.api_endpoints.append(APIEndpoint(
+                        method=m_type,
+                        path=path,
+                        function_name=f"go_{m_type.lower()}_{path.strip('/').replace('/', '_').replace(':', '') or 'root'}",
+                        path_params=path_params,
+                        body_fields=body_fields,
+                        file_path=relative,
+                        line_number=line_number
+                    ))
+
+            # 3. Standard Library
+            std_pat = re.compile(r'http\.HandleFunc\s*\(\s*["\']([^"\'\s]+)["\']', re.IGNORECASE)
+            for m in std_pat.finditer(content):
+                path = m.group(1)
+                line_number = content.count("\n", 0, m.start()) + 1
+                self.api_endpoints.append(APIEndpoint(
+                    method="GET",
+                    path=path,
+                    function_name=f"go_std_{path.strip('/').replace('/', '_') or 'root'}",
+                    file_path=relative,
+                    line_number=line_number
+                ))
+        except Exception:
+            pass
+
+    # ──────────────────────────────────────────────────────────────
+    # Documentation Detection
+    # ──────────────────────────────────────────────────────────────
+
+    def _detect_existing_docs(self) -> None:
+        """Heuristic to detect if the project already has Swagger/OpenAPI docs."""
+        # 1. Check for well-known libraries/dependencies
+        for fp in self.project_path.rglob("package.json"):
+            try:
+                text = fp.read_text(encoding="utf-8", errors="ignore").lower()
+                if any(x in text for x in ["swagger-ui-express", "swagger-jsdoc", "tsoa"]):
+                    self.has_existing_docs = True
+                    return
+            except Exception: pass
+
+        for fp in self.project_path.rglob("requirements.txt"):
+            try:
+                text = fp.read_text(encoding="utf-8", errors="ignore").lower()
+                if any(x in text for x in ["fastapi", "flask-smorest", "drf-spectacular"]):
+                    self.has_existing_docs = True
+                    return
+            except Exception: pass
+
+        for fp in self.project_path.rglob("pom.xml"):
+            try:
+                text = fp.read_text(encoding="utf-8", errors="ignore").lower()
+                if any(x in text for x in ["springdoc-openapi", "springfox-swagger"]):
+                    self.has_existing_docs = True
+                    return
+            except Exception: pass
+
+        # 2. Check for decorator usage in Python (FastAPI is auto-docs)
+        for ep in self.api_endpoints:
+            if ep.file_path.endswith(".py"):
+                # Most Python web frameworks we parse (FastAPI) are auto-documenting
+                self.has_existing_docs = True
+                return
+
+        # 3. Check for specific markers (e.g., swagger.yaml, openapi.json)
+        doc_markers = ["swagger.json", "swagger.yaml", "swagger.yml", "openapi.json", "openapi.yaml", "openapi.yml"]
+        for marker in doc_markers:
+            if any(self.project_path.rglob(marker)):
+                self.has_existing_docs = True
+                return
 
 
 def parse_project_code(project_path: str | Path) -> Dict[str, Any]:

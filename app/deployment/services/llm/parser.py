@@ -60,6 +60,53 @@ def extract_json(text: str) -> Dict[str, Any]:
                         pass
                     break
 
+    # 3. If standard matches fail, try to fix truncation by appending closing braces
+    if match:
+        start = match.start()
+        candidate = clean[start:]
+        open_braces = candidate.count("{")
+        close_braces = candidate.count("}")
+        missing = max(0, open_braces - close_braces)
+        
+        # Try appending missing braces + some padding
+        for extra in range(missing, missing + 5):
+            # Try directly
+            try:
+                res = json.loads(candidate + "}" * extra)
+                if isinstance(res, dict):
+                    return res
+            except json.JSONDecodeError:
+                pass
+            
+            # Try closing an open string first
+            try:
+                res = json.loads(candidate + '"' + "}" * extra)
+                if isinstance(res, dict):
+                    return res
+            except json.JSONDecodeError:
+                pass
+                
+            # Try closing an open array
+            try:
+                res = json.loads(candidate + ']' + "}" * extra)
+                if isinstance(res, dict):
+                    return res
+            except json.JSONDecodeError:
+                pass
+            
+            # Try closing literal values like null, true, false
+            try:
+                # remove trailing incomplete text up to last comma or colon
+                last_comma = candidate.rfind(",")
+                last_colon = candidate.rfind(":")
+                cut_idx = max(last_comma, last_colon)
+                if cut_idx > 0:
+                    res = json.loads(candidate[:cut_idx] + "}" * extra)
+                    if isinstance(res, dict):
+                        return res
+            except json.JSONDecodeError:
+                pass
+
     logger.warning("Failed to extract JSON from LLM output (length=%d)", len(text))
     return {}
 

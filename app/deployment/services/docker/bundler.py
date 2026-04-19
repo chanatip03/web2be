@@ -109,7 +109,8 @@ async def create_bundle(
 
         # 2. Get or generate docker-compose.yml
         compose_path = tmp_path / "docker-compose.yml"
-        compose_content = _get_compose_content(deployment, project_path)
+        compose_raw = _get_compose_content(deployment, project_path, analysis)
+        compose_content = _make_compose_portable(compose_raw)
         compose_path.write_text(compose_content, encoding="utf-8")
 
         # 2b. Copy any required runtime assets referenced by compose (e.g. seed.sql)
@@ -178,7 +179,11 @@ def _save_images_to_tar(image_tags: List[str], output_path: Path) -> None:
                 f.write(chunk)
 
 
-def _get_compose_content(deployment: DeploymentStatus, project_path: Path) -> str:
+def _get_compose_content(
+    deployment: DeploymentStatus, 
+    project_path: Path,
+    analysis: Optional[ProjectAnalysis] = None
+) -> str:
     """Get the docker-compose.yml content — from deployment or file."""
     # Try existing compose file
     if deployment.compose_file_path:
@@ -194,16 +199,98 @@ def _get_compose_content(deployment: DeploymentStatus, project_path: Path) -> st
 
     # Generate a simple one
     image = deployment.image_tag or "app:latest"
-    port = deployment.host_port or 8000
+    host_port = deployment.host_port or 8000
+    container_port = 8000 # Default
+
+    # Logic to find the correct container port
+    found_port = False
+    if deployment.service_ports:
+        # Prefer the 'primary' service port (frontend or app)
+        for pref in ("frontend", "app", "backend"):
+            for sp in deployment.service_ports:
+                if sp.service == pref:
+                    # Handle both dict and Pydantic model (depending on code path)
+                    if hasattr(sp, "container_port"):
+                        container_port = sp.container_port
+                    else:
+                        container_port = sp.get("container_port", 8000)
+                    found_port = True
+                    break
+            if found_port: break
+        
+        # Fallback to the first available service port if no priority match
+        if not found_port and deployment.service_ports:
+            sp = deployment.service_ports[0]
+            if hasattr(sp, "container_port"):
+                container_port = sp.container_port
+            else:
+                container_port = sp.get("container_port", 8000)
+            found_port = True
+
+    if not found_port:
+        # Heuristic fallback based on project type
+        mode = (deployment.deploy_mode or "").lower()
+        if mode == "static-html" or "frontend" in image.lower():
+            container_port = 80
+        elif host_port > 1024:
+            # If no better info, assume container port matches host port (e.g. 8000:8000)
+            container_port = host_port
+
+    db_service = ""
+    db_env = ""
+    
+    if analysis and analysis.database_info and analysis.database_info.get("detected"):
+        db_type = (analysis.database_info.get("type") or "").lower()
+        db_images = {
+            "postgresql": "postgres:16-alpine",
+            "postgres": "postgres:16-alpine",
+            "mysql": "mysql:8.0",
+            "mariadb": "mariadb:11",
+            "mongodb": "mongo:7",
+            "mongo": "mongo:7",
+            "redis": "redis:7-alpine",
+        }
+        db_image = db_images.get(db_type)
+        if db_image:
+            db_service = f"""
+  db:
+    image: {db_image}
+    environment:
+      POSTGRES_DB: app_db
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app_secret
+      MYSQL_DATABASE: app_db
+      MYSQL_USER: app
+      MYSQL_PASSWORD: app_secret
+      MYSQL_ROOT_PASSWORD: root_secret
+      MONGO_INITDB_ROOT_USERNAME: app
+      MONGO_INITDB_ROOT_PASSWORD: app_secret
+    restart: unless-stopped"""
+            # Inject connection info for the app
+            db_port = "5432" if "postgres" in db_type else "3306"
+            if "mongo" in db_type:
+                db_port = "27017"
+            elif "redis" in db_type:
+                db_port = "6379"
+            
+            db_env = f"""
+    environment:
+      - DATABASE_URL={db_type}://app:app_secret@db:{db_port}/app_db
+      - DB_HOST=db
+      - DB_PORT={db_port}
+      - DB_USER=app
+      - DB_PASSWORD=app_secret
+      - DB_NAME=app_db"""
+
     return f"""# Auto-generated for portable deployment
 services:
   app:
     image: {image}
     ports:
-      - "{port}:{port}"
+      - "{host_port}:{container_port}"
     env_file:
-      - .env
-    restart: unless-stopped
+      - .env{db_env}
+    restart: unless-stopped{db_service}
 """
 
 

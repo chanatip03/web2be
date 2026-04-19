@@ -287,6 +287,53 @@ async def get_deployment_status(deployment_id: str):
     return _as_frontend_status(deployment)
 
 
+@router.get("/deployments/{deployment_id}/openapi.json")
+async def get_deployment_swagger(deployment_id: str):
+    """Serve the auto-generated openapi.json if it exists."""
+    swagger_path = Path(settings.deployments_dir) / deployment_id / "openapi.json"
+    if not swagger_path.exists():
+        raise HTTPException(status_code=404, detail="Swagger spec not found for this deployment")
+    return FileResponse(str(swagger_path), media_type="application/json")
+
+
+@router.get("/deployments/{deployment_id}/swagger")
+async def get_deployment_swagger_ui(deployment_id: str):
+    """Serve a simple Swagger UI page for the deployment."""
+    from fastapi.responses import HTMLResponse
+    
+    swagger_json_url = f"/api/deployments/{deployment_id}/openapi.json"
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Swagger UI - {deployment_id}</title>
+        <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui.css" />
+    </head>
+    <body>
+        <div id="swagger-ui"></div>
+        <script src="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui-bundle.js"></script>
+        <script>
+            window.onload = () => {{
+                window.ui = SwaggerUIBundle({{
+                    url: '{swagger_json_url}',
+                    dom_id: '#swagger-ui',
+                    deepLinking: true,
+                    presets: [
+                        SwaggerUIBundle.presets.apis,
+                        SwaggerUIBundle.presets.viewConfig
+                    ],
+                }});
+            }};
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
+
 # ── Deployment logs ──────────────────────────────────────────────
 
 @router.get("/deployments/{deployment_id}/logs")
