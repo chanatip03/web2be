@@ -37,7 +37,7 @@ _PREVIEW_PROJECT_COOKIE = "preview_project_id"
 
 
 _UUID_RE = re.compile(
-    r"(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    r"(?i)^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$"
 )
 
 
@@ -47,7 +47,7 @@ def _infer_project_id_from_referer(request: Request) -> Optional[str]:
         return None
 
     match = re.search(
-        r"(?i)/preview/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:/|$)",
+        r"(?i)/preview/([0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12})(?:/|$)",
         referer,
     )
     if not match:

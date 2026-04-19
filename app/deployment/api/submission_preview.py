@@ -30,7 +30,7 @@ from app.utils.r2 import get_file_bytes, R2_PUBLIC_URL
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/project", tags=["Submission Preview"])
+router = APIRouter(tags=["Submission Preview"])
 
 # ── 2-hour TTL ───────────────────────────────────────────────────────────────
 _TTL_SECONDS = 2 * 60 * 60   # 2 hours
@@ -182,7 +182,13 @@ def _launch_bundle(submission_id: str) -> PreviewSession:
 
 # ── API Endpoints ─────────────────────────────────────────────────────────────
 
-@router.post("/{submission_id}/preview/start")
+@router.get("/api/submission/project/{submission_id}/activate")
+async def activate_preview_compat(submission_id: str, background_tasks: BackgroundTasks):
+    """Compat: GET to 'activate' which starts the preview and returns current status."""
+    return await start_preview(submission_id, background_tasks)
+
+
+@router.post("/api/project/{submission_id}/preview/start")
 async def start_preview(submission_id: str, background_tasks: BackgroundTasks):
     """Pull the submission bundle from R2 and run it as Docker containers.
 
@@ -238,7 +244,7 @@ def _launch_and_schedule(submission_id: str) -> None:
     _schedule_cleanup(submission_id)
 
 
-@router.get("/{submission_id}/preview/status")
+@router.get("/api/project/{submission_id}/preview/status")
 async def get_preview_status(submission_id: str):
     """Poll container status.  Returns preview_url once running."""
     session = _sessions.get(submission_id)
@@ -258,7 +264,7 @@ async def get_preview_status(submission_id: str):
     }
 
 
-@router.delete("/{submission_id}/preview/stop", status_code=200)
+@router.delete("/api/project/{submission_id}/preview/stop", status_code=200)
 async def stop_preview(submission_id: str):
     """Manually stop and remove the container before the 2-hour TTL."""
     if submission_id not in _sessions:
