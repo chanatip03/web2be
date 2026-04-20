@@ -11,7 +11,20 @@ from .service import (
     update_project_grading_service
 )
 
+#add get all
+
 router = APIRouter(prefix="/project", tags=["Project"])
+
+@router.get("/", response_model=List[ProjectResponse])
+def get_all_projects_endpoint(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        data = get_projects_service(db, current_user)
+        return data
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
 @router.get("/{project_id}", response_model=ProjectResponse)
 def get_project_endpoint(

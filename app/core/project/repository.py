@@ -1,6 +1,6 @@
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from app.models.schema import Project, Group, SubmissionOf
+from app.models.schema import Project, Group
 
 def get_project_by_id(db: Session, project_id: int) -> Optional[Project]:
     return db.query(Project).filter(Project.id == project_id).first()
@@ -8,7 +8,7 @@ def get_project_by_id(db: Session, project_id: int) -> Optional[Project]:
 def get_projects_by_assignment_id(db: Session, assignment_id: int) -> List[Project]:
     group_projects = db.query(Project).join(Group, Project.group_id == Group.id).filter(Group.assignment_id == assignment_id).all()
     
-    individual_projects = db.query(Project).join(SubmissionOf, SubmissionOf.project_id == Project.id).filter(SubmissionOf.assignment_id == assignment_id).all()
+    individual_projects = db.query(Project).filter(Project.assignment_id == assignment_id).all()
 
     # Merge avoiding duplicates
     project_ids = set()

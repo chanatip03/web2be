@@ -34,7 +34,7 @@ from app.deployment.services.deployer.pipeline import (
     project_store,
     run_deployment,
 )
-from app.models.schema import Project, SubmissionOf, SubmissionTypeEnum
+from app.models.schema import Project, SubmissionTypeEnum
 from app.core.generatetestcase.services.runner import run_robot_tests_with_suite_content
 from app.utils.r2 import R2_PUBLIC_URL, get_file_bytes, upload_file as r2_upload_file
 
@@ -244,7 +244,6 @@ def _ensure_submission_runtime_ready(
 def _create_submission_records(
     db: Session,
     *,
-    assignment_id: int,
     student_id: int,
     group_id: Optional[int],
     is_group: bool,
@@ -271,6 +270,7 @@ def _create_submission_records(
 
     project = Project(
         group_id=group_id if is_group else None,
+        student_id=None if is_group else student_id,
         submission_type=submission_type,
         project_source_url=initial_source_url,
         env=env or execution_mode,
@@ -278,16 +278,6 @@ def _create_submission_records(
     )
     db.add(project)
     db.flush()
-
-    if not is_group:
-        # Individual assignment: record the student → project link
-        db.add(
-            SubmissionOf(
-                project_id=project.id,
-                student_id=student_id,
-                assignment_id=assignment_id,
-            )
-        )
 
     db.commit()
     db.refresh(project)
@@ -300,6 +290,8 @@ def _persist_project_results(
     cybersecurity_result: dict | None = None,
     testcase_result: dict | None = None,
     project_source_url: str | None = None,
+    container_id: str | None = None,
+    container_resource: str | None = None,
 ) -> None:
     if project_db_id is None:
         return
@@ -315,6 +307,10 @@ def _persist_project_results(
             project.testcase_result = json.dumps(testcase_result, ensure_ascii=False)
         if project_source_url is not None:
             project.project_source_url = project_source_url
+        if container_id is not None:
+            project.container_id = container_id
+        if container_resource is not None:
+            project.container_resource = container_resource
         db.commit()
     finally:
         db.close()
@@ -424,7 +420,6 @@ async def create_submission_service(
 
     project = _create_submission_records(
         db,
-        assignment_id=assignment_id,
         student_id=student.id,
         group_id=resolved_group_id,
         is_group=is_group,
@@ -622,6 +617,26 @@ async def _run_deployment_step(manifest: SubmissionManifest) -> None:
     project_name = _submission_source_name(manifest.source_ref, manifest.source_type)
     project_dir = _materialize_deployment_project(submission_id)
 
+    # NEW: Zip project_dir and upload to R2 for project_source_url
+    try:
+        from app.utils.archive import zip_directory
+        from app.utils.r2 import upload_file
+        import logging
+        logger = logging.getLogger(__name__)
+
+        zipped_source = zip_directory(str(project_dir))
+        source_key = f"submissions/{submission_id}.zip"
+        _, source_url = upload_file(source_key, zipped_source, content_type="application/zip")
+        
+        # Persist the newly uploaded source URL
+        _persist_project_results(
+            manifest.project_db_id,
+            project_source_url=source_url,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Failed to zip and upload source for {submission_id}: {e}")
+
     file_tree = None
     try:
         file_tree = FileNode.model_validate(build_file_tree(project_dir))
@@ -725,6 +740,57 @@ async def _run_deployment_step(manifest: SubmissionManifest) -> None:
         "deployment",
         "success",
         preview_url=preview_url,
+    )
+    # Persist the container_id to the Project record so it can be referenced later
+    final_container_id = deployment.container_id
+    if deployment.compose_project:
+        try:
+            import subprocess
+            res = subprocess.run(
+                ["docker", "ps", "-q", "--filter", f"label=com.docker.compose.project={deployment.compose_project}"],
+                capture_output=True, text=True
+            )
+            c_ids = [cid.strip() for cid in res.stdout.strip().split('\n') if cid.strip()]
+            if c_ids:
+                final_container_id = c_ids[0]
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to run docker ps: {e}")
+
+    # Fallback to older container ID command if no compose_project found string
+    if not final_container_id:
+        try:
+            import subprocess
+            res = subprocess.run(
+                ["docker", "ps", "-q", "--latest"],
+                capture_output=True, text=True
+            )
+            c_ids = [cid.strip() for cid in res.stdout.strip().split('\n') if cid.strip()]
+            if c_ids:
+                final_container_id = c_ids[0]
+        except Exception as e:
+            pass
+
+    container_resource_url = None
+    target_deployments_dir = Path(settings.data_dir) / "submissions" / submission_id / "artifacts" / "deployment"
+        
+    if target_deployments_dir.exists() and target_deployments_dir.is_dir():
+        try:
+            from app.utils.r2 import upload_file
+            tar_files = list(target_deployments_dir.glob("*.tar.gz"))
+            if tar_files:
+                tar_path = tar_files[0]
+                tar_data = tar_path.read_bytes()
+                key = f"submissions/{submission_id}/{tar_path.name}"
+                _, container_resource_url = upload_file(key, tar_data, content_type="application/gzip")
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to upload deployment tar artifact for {submission_id}: {e}")
+
+    _persist_project_results(
+        manifest.project_db_id,
+        container_id=final_container_id,
+        container_resource=container_resource_url,
     )
     write_manifest(manifest)
 
@@ -892,6 +958,12 @@ async def _run_r2_upload_step(manifest: SubmissionManifest) -> None:
             key = f"submissions/{submission_id}/bundle.tar.gz"
             _, url = r2_upload_file(key, bundle_path.read_bytes(), content_type="application/gzip")
             r2_results["bundle"] = url
+            
+            # Ensure DB is updated to match the final R2 URL where it successfully lands
+            _persist_project_results(
+                manifest.project_db_id,
+                container_resource=url,
+            )
         except Exception as exc:
             r2_results["bundle_error"] = str(exc)
 
@@ -960,3 +1032,117 @@ def resolve_submission_artifact_service(
     _ensure_submission_access(manifest, db, current_user)
     artifact, artifact_path = resolve_artifact_path(manifest, artifact_id)
     return artifact, artifact_path
+
+
+async def activate_project_service(
+    project_db_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session,
+    current_user,
+):
+    import logging
+    from fastapi import HTTPException, status
+    
+    project = db.query(Project).filter(Project.id == project_db_id).first()
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    
+    if not project.container_resource:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Project has no container resource")
+        
+    submission_id = f"proj-{project.id}"
+    
+    from app.deployment.api.submission_preview import _sessions, PreviewSession, _schedule_cleanup
+    existing = _sessions.get(submission_id)
+    
+    if existing and existing.status == "running" and existing.seconds_remaining > 0:
+        return {
+            "status": "running",
+            "preview_url": existing.preview_url,
+            "seconds_remaining": existing.seconds_remaining,
+        }
+        
+    if existing and existing.status == "starting":
+        return {
+            "status": "starting",
+            "preview_url": None,
+            "seconds_remaining": existing.seconds_remaining,
+        }
+        
+    if existing and existing.status == "error":
+        return {
+            "status": "error",
+            "error": existing.error,
+        }
+        
+    session = PreviewSession(
+        submission_id=submission_id,
+        compose_project=f"activate-{submission_id}",
+        runtime_dir=str(Path(settings.deployments_dir) / "activations" / submission_id),
+    )
+    _sessions[submission_id] = session
+    
+    def _do_activate():
+        logger = logging.getLogger(__name__)
+        try:
+            logger.info(f"Activating project {project_db_id} from {project.container_resource}")
+            
+            from app.utils.r2 import R2_PUBLIC_URL, get_file_bytes
+            key = project.container_resource.replace(R2_PUBLIC_URL.rstrip('/') + "/", "")
+            tar_bytes = get_file_bytes(key)
+            
+            import shutil
+            import uuid
+            
+            extract_dir = str(Path(settings.deployments_dir) / "activations" / "bundles" / str(uuid.uuid4()))
+            Path(extract_dir).mkdir(parents=True, exist_ok=True)
+            bundle_path = Path(extract_dir) / "bundle.tar.gz"
+            bundle_path.write_bytes(tar_bytes)
+                
+            from app.deployment.services.docker.bundle_runner import run_from_bundle
+            result = run_from_bundle(
+                bundle_path=bundle_path,
+                runtime_dir=Path(session.runtime_dir),
+                compose_project=session.compose_project,
+                remove_existing=True,
+            )
+            
+            # Clean up temporary extracted folder
+            shutil.rmtree(extract_dir, ignore_errors=True)
+            
+            session.status = "running"
+            session.preview_url = f"/preview/{submission_id}/"
+            session.service_ports = result.get("service_ports", [])
+            _sessions[submission_id] = session
+            
+            from app.deployment.services.deployer.pipeline import deployment_store
+            from app.deployment.models.deployment import DeploymentStatus, ServicePortMapping
+            
+            dep = deployment_store.get(submission_id)
+            if not dep:
+                dep = DeploymentStatus(deployment_id=submission_id, project_id=submission_id)
+            dep.status = "running"
+            dep.preview_url = session.preview_url
+            dep.compose_project = session.compose_project
+            if session.service_ports:
+                dep.service_ports = [ServicePortMapping(**sp) for sp in session.service_ports]
+                dep.compose_services = [sp.get("service") for sp in session.service_ports if sp.get("service")]
+            dep.deploy_mode = "fullstack"
+            deployment_store.save(dep)
+            
+            logger.info(f"Activated project {project_db_id} successfully")
+            
+        except Exception as e:
+            logger.exception(f"Activation error: {e}")
+            session.status = "error"
+            session.error = str(e)
+            _sessions[submission_id] = session
+            
+        _schedule_cleanup(submission_id)
+        
+    background_tasks.add_task(_do_activate)
+    return {
+        "status": "starting",
+        "preview_url": f"/preview/{submission_id}/",
+        "seconds_remaining": session.seconds_remaining,
+    }

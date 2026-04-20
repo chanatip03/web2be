@@ -76,3 +76,14 @@ def download_submission_artifact(
         media_type=artifact.content_type,
         filename=artifact.name,
     )
+
+
+@router.get("/project/{project_db_id}/activate")
+async def activate_project(
+    project_db_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    from .service import activate_project_service
+    return await activate_project_service(project_db_id, background_tasks, db, current_user)
