@@ -51,7 +51,7 @@ def get_admin_students(db: Session, current_user: dict, search: str | None = Non
             email=user.email,
             academy=user.academy,
             imageUrl=user.image_url,
-            studentId=user.student.student_id if user.student else None,
+            studentId=getattr(user, "student_id", None),
         )
         for user in users
     ]
@@ -68,8 +68,8 @@ def get_admin_teachers(db: Session, current_user: dict, search: str | None = Non
             email=user.email,
             academy=user.academy,
             imageUrl=user.image_url,
-            certificateUrl=user.teacher.certificate_url if user.teacher else None,
-            isApproved=bool(user.teacher.is_approved) if user.teacher else False,
+            certificateUrl=getattr(user, "certificate_url", None),
+            isApproved=bool(getattr(user, "is_approved", False)),
         )
         for user in users
     ]
@@ -88,7 +88,7 @@ def get_admin_teacher_requests(
             name=f"{user.first_name} {user.last_name}",
             email=user.email,
             academy=user.academy,
-            certificateUrl=user.teacher.certificate_url if user.teacher else None,
+            certificateUrl=getattr(user, "certificate_url", None),
             imageUrl=user.image_url,
         )
         for user in users
@@ -98,10 +98,10 @@ def get_admin_teacher_requests(
 def approve_teacher_request(db: Session, user_id: int, current_user: dict) -> None:
     _ensure_admin(current_user)
     user = repository.get_teacher_request_user(db, user_id)
-    if not user or not user.teacher:
+    if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher request not found")
 
-    repository.set_teacher_approval(db, user.teacher, True)
+    repository.set_teacher_approval(db, user, True)
 
 
 def reject_teacher_request(db: Session, user_id: int, current_user: dict) -> None:
@@ -126,6 +126,9 @@ def _normalize_container_status(raw_status: str | None) -> str:
     return status_value or "unknown"
 
 
+PREFERRED_RUNTIME_SERVICES = ("frontend", "backend", "app", "web")
+
+
 def _resolve_health_target_container_id(deployment: DeploymentStatus) -> str | None:
     if deployment.container_id:
         return deployment.container_id
@@ -145,20 +148,28 @@ def _resolve_health_target_container_id(deployment: DeploymentStatus) -> str | N
     if not containers:
         return None
 
-    preferred_services = ("frontend", "backend", "app", "web")
+    runtime_containers = []
+    for container in containers:
+        labels = getattr(container, "labels", {}) or {}
+        service_name = str(labels.get("com.docker.compose.service", "")).lower()
+        if service_name in PREFERRED_RUNTIME_SERVICES:
+            runtime_containers.append(container)
+
+    if not runtime_containers:
+        return None
 
     def container_sort_key(container) -> tuple[int, int, str]:
         labels = getattr(container, "labels", {}) or {}
         service_name = str(labels.get("com.docker.compose.service", "")).lower()
         service_rank = (
-            preferred_services.index(service_name)
-            if service_name in preferred_services
-            else len(preferred_services)
+            PREFERRED_RUNTIME_SERVICES.index(service_name)
+            if service_name in PREFERRED_RUNTIME_SERVICES
+            else len(PREFERRED_RUNTIME_SERVICES)
         )
         running_rank = 0 if getattr(container, "status", "") == "running" else 1
         return (running_rank, service_rank, getattr(container, "name", ""))
 
-    return sorted(containers, key=container_sort_key)[0].id
+    return sorted(runtime_containers, key=container_sort_key)[0].id
 
 
 def _resolve_runtime_container_ids(deployment: DeploymentStatus) -> list[str]:
@@ -232,14 +243,21 @@ async def get_admin_containers(db: Session, current_user: dict) -> list[AdminCon
         teacher_name = "Unknown teacher"
         student_code = None
 
-        assignment = get_assignment_by_id(db, manifest.assignment_id)
-        if assignment:
-            assignment_name = assignment.title
-            classroom = get_classroom_by_id(db, assignment.classroom_id)
-            if classroom and classroom.teacher and classroom.teacher.user:
-                teacher_name = (
-                    f"{classroom.teacher.user.first_name} {classroom.teacher.user.last_name}"
-                )
+        try:
+            assignment = get_assignment_by_id(db, manifest.assignment_id)
+            if assignment:
+                assignment_name = assignment.title
+                try:
+                    classroom = get_classroom_by_id(db, assignment.classroom_id)
+                except Exception:
+                    classroom = None
+
+                if classroom and classroom.teacher and classroom.teacher.user:
+                    teacher_name = (
+                        f"{classroom.teacher.user.first_name} {classroom.teacher.user.last_name}"
+                    )
+        except Exception:
+            assignment = None
 
         student = students_by_id.get(manifest.student_id)
         if student:

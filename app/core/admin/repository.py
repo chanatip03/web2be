@@ -1,8 +1,10 @@
-from sqlalchemy import or_
-from sqlalchemy.orm import Session, joinedload
+from types import SimpleNamespace
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from app.models.schema import Admin
-from app.models.schema import Role, Student, Teacher, User
+from app.models.schema import Student, Teacher, User
 from app.utils.generate_token import hash_password
 
 def create_admin(db: Session, email: str, password: str):
@@ -23,32 +25,51 @@ def get_admin_by_email(db: Session, email: str):
     return db.query(Admin).filter(Admin.email == email).first()
 
 
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _person_search_clause(search: str | None, fields: list[str]) -> tuple[str, dict]:
+    if not search or not search.strip():
+        return "", {}
+
+    keyword = f"%{_escape_like(search.strip())}%"
+    clauses = [f"{field} ILIKE :keyword ESCAPE '\\\\'" for field in fields]
+    return f" AND ({' OR '.join(clauses)})", {"keyword": keyword}
+
+
 def get_student_users(db: Session, search: str | None = None):
-    query = (
-        db.query(User)
-        .join(Role)
-        .join(Student)
-        .options(joinedload(User.student))
-        .filter(
-            Role.name == "student",
-            User.deleted_date.is_(None),
-            Student.deleted_date.is_(None),
-        )
+    search_clause, params = _person_search_clause(
+        search,
+        ["u.first_name", "u.last_name", "u.email", "COALESCE(u.academy, '')", "COALESCE(s.student_id, '')"],
     )
 
-    if search:
-        keyword = f"%{search.strip()}%"
-        query = query.filter(
-            or_(
-                User.first_name.ilike(keyword),
-                User.last_name.ilike(keyword),
-                User.email.ilike(keyword),
-                User.academy.ilike(keyword),
-                Student.student_id.ilike(keyword),
-            )
-        )
+    rows = db.execute(
+        text(
+            f"""
+            SELECT
+                u.id,
+                u.first_name,
+                u.last_name,
+                u.email,
+                u.academy,
+                u.image_url,
+                s.student_id
+            FROM users u
+            JOIN students s ON s.user_id = u.id
+            JOIN role_users ru ON ru.user_id = u.id
+            JOIN roles r ON r.id = ru.role_id
+            WHERE r.name = 'student'
+              AND u.deleted_date IS NULL
+              AND s.deleted_date IS NULL
+              {search_clause}
+            ORDER BY u.created_date DESC
+            """
+        ),
+        params,
+    ).mappings().all()
 
-    return query.order_by(User.created_date.desc()).all()
+    return [SimpleNamespace(**row) for row in rows]
 
 
 def get_students_by_ids(db: Session, student_ids: list[int]) -> dict[int, Student]:
@@ -67,51 +88,85 @@ def get_students_by_ids(db: Session, student_ids: list[int]) -> dict[int, Studen
 
 
 def get_teacher_users(db: Session, search: str | None = None, *, approved_only: bool | None = None):
-    query = (
-        db.query(User)
-        .join(Role)
-        .join(Teacher)
-        .options(joinedload(User.teacher))
-        .filter(
-            Role.name == "teacher",
-            User.deleted_date.is_(None),
-            Teacher.deleted_date.is_(None),
-        )
+    search_clause, params = _person_search_clause(
+        search,
+        ["u.first_name", "u.last_name", "u.email", "COALESCE(u.academy, '')"],
     )
 
-    if approved_only is not None:
-        query = query.filter(Teacher.is_approved.is_(approved_only))
+    approval_clause = ""
+    if approved_only is True:
+        approval_clause = " AND t.is_approved IS TRUE"
+    elif approved_only is False:
+        approval_clause = " AND COALESCE(t.is_approved, FALSE) IS FALSE"
 
-    if search:
-        keyword = f"%{search.strip()}%"
-        query = query.filter(
-            or_(
-                User.first_name.ilike(keyword),
-                User.last_name.ilike(keyword),
-                User.email.ilike(keyword),
-                User.academy.ilike(keyword),
-            )
-        )
+    rows = db.execute(
+        text(
+            f"""
+            SELECT
+                u.id,
+                u.first_name,
+                u.last_name,
+                u.email,
+                u.academy,
+                u.image_url,
+                t.certificate_url,
+                COALESCE(t.is_approved, FALSE) AS is_approved
+            FROM users u
+            JOIN teachers t ON t.user_id = u.id
+            JOIN role_users ru ON ru.user_id = u.id
+            JOIN roles r ON r.id = ru.role_id
+            WHERE r.name = 'teacher'
+              AND u.deleted_date IS NULL
+              AND t.deleted_date IS NULL
+              {approval_clause}
+              {search_clause}
+            ORDER BY u.created_date DESC
+            """
+        ),
+        params,
+    ).mappings().all()
 
-    return query.order_by(User.created_date.desc()).all()
+    return [SimpleNamespace(**row) for row in rows]
 
 
 def get_teacher_request_user(db: Session, user_id: int):
-    return (
-        db.query(User)
-        .join(Teacher)
-        .options(joinedload(User.teacher))
-        .filter(
-            User.id == user_id,
-            User.deleted_date.is_(None),
-            Teacher.deleted_date.is_(None),
-            Teacher.is_approved.is_(False),
-        )
-        .first()
-    )
+    row = db.execute(
+        text(
+            """
+            SELECT
+                u.id AS user_id,
+                t.id AS teacher_id,
+                COALESCE(t.is_approved, FALSE) AS is_approved
+            FROM users u
+            JOIN teachers t ON t.user_id = u.id
+            WHERE u.id = :user_id
+              AND u.deleted_date IS NULL
+              AND t.deleted_date IS NULL
+              AND COALESCE(t.is_approved, FALSE) IS FALSE
+            LIMIT 1
+            """
+        ),
+        {"user_id": user_id},
+    ).mappings().first()
+    return SimpleNamespace(**row) if row else None
 
 
 def set_teacher_approval(db: Session, teacher: Teacher, is_approved: bool):
+    if hasattr(teacher, "teacher_id"):
+        db.execute(
+            text(
+                """
+                UPDATE teachers
+                SET is_approved = :is_approved,
+                    updated_date = NOW()
+                WHERE id = :teacher_id
+                """
+            ),
+            {"teacher_id": teacher.teacher_id, "is_approved": is_approved},
+        )
+        db.commit()
+        return teacher
+
     teacher.is_approved = is_approved
     db.commit()
     db.refresh(teacher)
@@ -119,5 +174,10 @@ def set_teacher_approval(db: Session, teacher: Teacher, is_approved: bool):
 
 
 def delete_pending_teacher_request(db: Session, user: User) -> None:
+    if hasattr(user, "user_id"):
+        db.execute(text("DELETE FROM users WHERE id = :user_id"), {"user_id": user.user_id})
+        db.commit()
+        return
+
     db.delete(user)
     db.commit()
