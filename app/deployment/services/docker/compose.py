@@ -164,7 +164,7 @@ def generate_compose_yaml(
             lines.append(f'      {k}: "{v}"')
 
     depends_on = []
-    if database_type:
+    if database_type and database_type.lower() != "sqlite":
         depends_on.append("db")
     if depends_on:
         lines.append("    depends_on:")
@@ -231,7 +231,7 @@ def generate_compose_yaml(
         ]
 
     # ── Database service ─────────────────────────────────
-    if database_type:
+    if database_type and database_type.lower() != "sqlite":
         db_type = database_type.lower()
         db_image = _DB_IMAGES.get(db_type, f"{db_type}:latest")
         db_container_port = _DB_PORTS.get(db_type, 5432)

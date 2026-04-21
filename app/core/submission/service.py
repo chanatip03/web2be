@@ -100,6 +100,22 @@ def _resolve_execution_mode(assignment) -> str:
     )
 
 
+def _resolve_execution_mode_from_payload_or_assignment(payload, assignment) -> str:
+    """Prefer explicit client-provided mode; fall back to assignment.project_type."""
+    # allow either "project_type" or "deploy_mode" from client
+    requested = None
+    try:
+        requested = getattr(payload, "project_type", None) or getattr(payload, "deploy_mode", None)
+    except Exception:
+        requested = None
+
+    requested_mode = _normalize_mode_name(requested)
+    if requested_mode:
+        return requested_mode
+
+    return _resolve_execution_mode(assignment)
+
+
 def _coerce_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -393,7 +409,7 @@ async def create_submission_service(
             )
 
     submission_id = uuid.uuid4().hex
-    execution_mode = _resolve_execution_mode(assignment)
+    execution_mode = _resolve_execution_mode_from_payload_or_assignment(payload, assignment)
     requires_testcase = execution_mode in {"frontend-only", "backend-only"} and bool(assignment.testcase_url)
     _ensure_submission_runtime_ready(
         execution_mode=execution_mode,
