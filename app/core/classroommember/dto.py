@@ -1,10 +1,18 @@
-from pydantic import BaseModel
+from typing import Optional
+from pydantic import BaseModel, ConfigDict
 
-from app.core.student.dto import StudentResponse
+from app.core.user.dto import StudentResponse
+
+
+class JoinClassroomRequest(BaseModel):
+    code: str
+
+    model_config = ConfigDict(from_attributes=True)
+
 
 class ClassroomMemberResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
-    student: StudentResponse
+    student: Optional[StudentResponse] = None
     classroom_id: int
-    class Config:
-        from_attributes = True

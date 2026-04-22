@@ -1,8 +1,8 @@
-from pydantic import BaseModel
 from typing import Optional
-from typing import Optional
+from pydantic import BaseModel, ConfigDict
 
-from app.core.teacher.dto import TeacherResponse
+from app.core.user.dto import TeacherResponse
+
 
 class CreateClassroomRequest(BaseModel):
     name: str
@@ -10,20 +10,21 @@ class CreateClassroomRequest(BaseModel):
     description: Optional[str] = None
     learningoutcomes: Optional[str] = None
 
+
 class ClassroomResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
     id: int
     name: str
     code: str
     semester: str
     description: Optional[str] = None
     learningoutcomes: Optional[str] = None
-    teacher: TeacherResponse
-    class Config:
-        from_attributes = True
+    teacher: Optional[TeacherResponse] = None
+
 
 class ClassroomUpdateDTO(BaseModel):
-    name: Optional[str]
-    semester: Optional[str]
-    description: Optional[str]
+    name: Optional[str] = None
+    semester: Optional[str] = None
+    description: Optional[str] = None
     learningoutcomes: Optional[str] = None
-

@@ -1,14 +1,17 @@
 from datetime import datetime, timezone
 from typing import Optional
+from urllib import response
+from typing_extensions import Annotated
 import uuid
-from fastapi import File, Form, Request, Response, APIRouter, Depends, HTTPException, UploadFile
-from pydantic import EmailStr
+from fastapi import File, Response, APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 from app.db.database import get_db
+from app.models.schema import User
 from app.utils.r2 import upload_file
-from .dto import LoginRequest, Token, VerifyOtpRequest, register_request
-from .service import authenticate_admin, authenticate_user
-from app.utils.generate_token import create_access_token , decode_token
+from app.utils.validator import get_current_user
+from .dto import LoginRequest, MeResponse, Token, VerifyOtpRequest, register_request
+from .service import authenticate_admin, authenticate_user, get_user_data_service
+from app.utils.generate_token import create_access_token
 from app.utils.otp import (
     generate_otp,
     hash_otp,
@@ -17,8 +20,7 @@ from app.utils.otp import (
     get_otp_memory,
     delete_otp_memory,
     )
-from app.core.student.service import create_student
-from app.core.teacher.service import create_teacher
+from app.core.user.service import create_user_service
 
 router = APIRouter(prefix="/auth" , tags=["auth"])
 
@@ -51,14 +53,13 @@ def login(data: LoginRequest, response: Response, db: Session = Depends(get_db))
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    if not user.roles or len(user.roles) != 1:
+    if not user.role:
         raise HTTPException(
             status_code=500,
-            detail="User must have exactly one role"
+            detail="User has no role assigned"
         )
 
-    role = user.roles[0].name
-    role_name = role.value if hasattr(role, "value") else str(role)
+    role_name = user.role.name.value if hasattr(user.role.name, "value") else str(user.role.name)
     role_name = role_name.lower()
 
     token = create_access_token({"userId": str(user.id), "role": role_name})
@@ -68,33 +69,29 @@ def login(data: LoginRequest, response: Response, db: Session = Depends(get_db))
 
 @router.post("/request-otp")
 async def request_otp(
-    data : register_request = Depends(register_request.as_form),
-    student_id: Optional[str] = Form(None),
+    data: register_request = Depends(register_request.as_form),
     certificate: Optional[UploadFile] = File(None),
 ):
     otp = generate_otp()
-    
-    if(data.role == "student"):
-        data.student_id = student_id
 
-    if data.role == "teacher":
+    # role_id 1 = student, role_id 2 = teacher
+    if data.role_id == 2:
         if not certificate:
             raise HTTPException(400, "Certificate required")
 
         content = await certificate.read()
         key = f"certificates/{uuid.uuid4()}.{certificate.filename.split('.')[-1]}"
         _, url = upload_file(key, content, content_type=certificate.content_type)
-
         data.certificate_url = url
 
     save_otp_memory(
-    email=data.email,
-    otp_hash=hash_otp(otp),
-    payload={
-        "role": data.role,
-        "data": data.model_dump(),
-    }
-)
+        email=data.email,
+        otp_hash=hash_otp(otp),
+        payload={
+            "role_id": data.role_id,
+            "data": data.model_dump(),
+        }
+    )
     print("SAVE OTP FOR:", data.email)
 
     send_otp_email(data.email, otp)
@@ -104,7 +101,7 @@ async def request_otp(
 def verify_otp(data: VerifyOtpRequest, db: Session = Depends(get_db)):
     email = data.email
     otp = data.otp
-    
+
     record = get_otp_memory(email)
     if not record:
         raise HTTPException(status_code=400, detail="OTP not found")
@@ -119,59 +116,53 @@ def verify_otp(data: VerifyOtpRequest, db: Session = Depends(get_db)):
             delete_otp_memory(email)
         raise HTTPException(status_code=400, detail="OTP invalid")
 
-    print("SAVE OTP FOR:", email)
-
     payload = record["payload"]
-    role = payload["role"]
-    data = payload["data"]
-
-    if isinstance(data, dict) is False:
-        data = data.model_dump()
+    role_id: int = payload["role_id"]
+    user_data: dict = payload["data"]
 
     try:
-        if role == "student":
-            user = create_student(
-                db,
-                data["first_name"],
-                data["last_name"],
-                data["email"],
-                data["password"],
-                data.get("academy"),
-                data.get("student_id"),
-            )
-
-        elif role == "teacher":
-            user = create_teacher(
-                db,
-                data["first_name"],
-                data["last_name"],
-                data["email"],
-                data["password"],
-                data["academy"],
-                data["certificate_url"],
-            )
-        else:
-            raise HTTPException(status_code=400, detail="Invalid role")
-
+        create_user_service(
+            db,
+            role_id,
+            user_data["first_name"],
+            user_data["last_name"],
+            user_data["email"],
+            user_data["password"],
+            user_data.get("academy"),
+            certificate_url=user_data.get("certificate_url"),
+            student_id=user_data.get("student_id"),
+        )
     finally:
         delete_otp_memory(email)
 
+    return {"message": "Register success"}
+
+
+@router.get("/me", response_model=MeResponse)
+async def get_user_data(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[dict, Depends(get_current_user)],
+):
+    user = get_user_data_service(db, current_user["id"])
+    return map_user_to_me_response(user)
+
+def map_user_to_me_response(user: User):
     return {
-        "message": "Register success",
-    }
+        "user": user,
+                "roles": {
+            "id": user.role.id,
+            "name": user.role.name.value, 
+        } if user.role else None,
 
-
-@router.get("/me")
-async def check_user_token(request: Request):
-    token = request.cookies.get("access_token")
-    print(token)
-    if not token:
-        raise HTTPException(status_code=401, detail="No access token")
+    } 
     
-    try:
-        payload = decode_token(token)
-        return payload
-    except Exception as e:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-
+@router.post("/logout")
+async def logout(response: Response):
+    response.delete_cookie(
+        key="access_token",
+        path="/",
+        httponly=True,
+        samesite="lax",  
+        secure=False 
+    )
+    return {"message": "Logged out"}
