@@ -31,10 +31,6 @@ def update_project_grading_service(db: Session, current_user: dict, project_id: 
     assignment_id = None
     if project.group_id and project.group:
         assignment_id = project.group.assignment_id
-    elif project.submission_of:
-        submission_of_record = project.submission_of[0] if isinstance(project.submission_of, list) and len(project.submission_of) > 0 else None
-        if submission_of_record:
-            assignment_id = submission_of_record.assignment_id
 
     if current_user.get("role") == "teacher":
         teacher = get_teacher_by_user_id(db, current_user["id"])
@@ -50,7 +46,6 @@ def update_project_grading_service(db: Session, current_user: dict, project_id: 
 
     project = update_project_grading_repo(db, project, score, feedback)
 
-    # Email notification logic
     if assignment_id:
         assignment = get_assignment_by_id(db, assignment_id)
         if assignment:
@@ -60,12 +55,6 @@ def update_project_grading_service(db: Session, current_user: dict, project_id: 
                 for member in project.group.members:
                     if member.student and member.student.user:
                         target_emails.add(member.student.user.email)
-            elif project.submission_of:
-                # submission_of connects Project to Student, from which we can get User.email
-                so_list = project.submission_of if isinstance(project.submission_of, list) else [project.submission_of]
-                for so in so_list:
-                    if so.student and so.student.user:
-                        target_emails.add(so.student.user.email)
             
             for email in target_emails:
                 background_tasks.add_task(send_grading_email, to_email=email, assignment_name=assignment_name)

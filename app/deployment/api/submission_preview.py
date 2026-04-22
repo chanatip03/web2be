@@ -26,6 +26,8 @@ from pydantic import BaseModel, Field
 from app.deployment.core.config import settings
 from app.deployment.services.docker.bundle_runner import run_from_bundle
 from app.deployment.services.docker.client import docker_client
+from app.deployment.services.deployer.pipeline import deployment_store
+from app.deployment.models.deployment import DeploymentStatus, ServicePortMapping
 from app.utils.r2 import get_file_bytes, R2_PUBLIC_URL
 
 logger = logging.getLogger(__name__)
@@ -116,6 +118,12 @@ def _teardown(submission_id: str) -> None:
     session.preview_url = None
     _sessions[submission_id] = session
 
+    dep = deployment_store.get(submission_id)
+    if dep:
+        dep.status = "stopped"
+        dep.preview_url = None
+        deployment_store.save(dep)
+
 
 async def _ttl_cleanup(submission_id: str) -> None:
     """Sleep for TTL seconds, then tear down the session."""
@@ -161,7 +169,7 @@ def _launch_bundle(submission_id: str) -> PreviewSession:
 
         # 3. Update session
         session.status = "running"
-        session.preview_url = result.get("primary_url")
+        session.preview_url = f"/preview/{submission_id}/"
         session.compose_project = compose_project
         session.runtime_dir = str(runtime)
         session.service_ports = result.get("service_ports", [])
@@ -177,6 +185,25 @@ def _launch_bundle(submission_id: str) -> PreviewSession:
         session.error = str(exc)
 
     _sessions[submission_id] = session
+
+    # 4. Sync with global deployment_store so the preview proxy (preview.py) routes correctly
+    dep = deployment_store.get(submission_id)
+    if not dep:
+        dep = DeploymentStatus(
+            deployment_id=submission_id,
+            project_id=submission_id,
+        )
+    dep.status = session.status
+    dep.preview_url = session.preview_url
+    dep.compose_project = session.compose_project
+    if session.status == "running":
+        dep.service_ports = [ServicePortMapping(**sp) for sp in session.service_ports] if session.service_ports else None
+        dep.compose_services = [sp.get("service") for sp in session.service_ports if sp.get("service")] if session.service_ports else None
+        # Default to fullstack to ensure frontend/backend proxying handles edge cases
+        if not dep.deploy_mode or dep.deploy_mode == "auto":
+            dep.deploy_mode = "fullstack"
+    deployment_store.save(dep)
+
     return session
 
 
