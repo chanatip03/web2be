@@ -18,9 +18,6 @@ logger = logging.getLogger(__name__)
 
 @app.on_event("startup")
 def seed_data():
-    # Ensure DB schema is up-to-date before seeding / handling requests.
-    # This is important when using a persistent Postgres volume where tables
-    # may already exist but migrations haven't been applied yet.
     try:
         subprocess.run(
             ["alembic", "upgrade", "head"],
@@ -29,7 +26,6 @@ def seed_data():
             text=True,
         )
     except Exception as exc:
-        # Don't crash the app if alembic isn't available; fall back to create_all.
         logger.warning("Alembic upgrade failed; falling back to create_all: %s", exc)
 
     Base.metadata.create_all(bind=engine)

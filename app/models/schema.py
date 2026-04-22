@@ -167,6 +167,7 @@ class Assignment(Base):
     project_type = relationship("ProjectType", back_populates="assignments")
     language = relationship("Language", back_populates="assignments")
     groups = relationship("Group", back_populates="assignment", cascade="all, delete-orphan")
+    projects = relationship("Project", back_populates="assignment", cascade="all, delete-orphan")
 
 class Attachment(Base):
     __tablename__ = "attachments"
@@ -203,6 +204,7 @@ class Project(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
+    assignment_id = Column(Integer, ForeignKey("assignments.id", ondelete="CASCADE"), nullable=True)
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=True)
     student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=True)
 
@@ -224,6 +226,7 @@ class Project(Base):
     
     group = relationship("Group", back_populates="projects")
     student = relationship("Student", back_populates="projects")
+    assignment = relationship("Assignment", back_populates="projects")
 
     @property
     def students(self):

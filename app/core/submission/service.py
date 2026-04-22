@@ -260,6 +260,7 @@ def _ensure_submission_runtime_ready(
 def _create_submission_records(
     db: Session,
     *,
+    assignment_id: int,
     student_id: int,
     group_id: Optional[int],
     is_group: bool,
@@ -285,6 +286,7 @@ def _create_submission_records(
     initial_source_url = source_ref or ""
 
     project = Project(
+        assignment_id=assignment_id,
         group_id=group_id if is_group else None,
         student_id=None if is_group else student_id,
         submission_type=submission_type,
@@ -436,6 +438,7 @@ async def create_submission_service(
 
     project = _create_submission_records(
         db,
+        assignment_id=assignment.id,
         student_id=student.id,
         group_id=resolved_group_id,
         is_group=is_group,

@@ -1983,5 +1983,42 @@ class DockerBuilder:
         }
 
 
+    def _find_seed_sql_mount(self, project_path: Path, analysis: ProjectAnalysis) -> Optional[str]:
+        """Look for a SQL file in the project to seed the database."""
+        # Common locations for seed/init scripts
+        candidates = [
+            "seed.sql",
+            "init.sql",
+            "database.sql",
+            "db/seed.sql",
+            "db/init.sql",
+            "sql/seed.sql",
+            "sql/init.sql",
+        ]
+        for rel in candidates:
+            p = project_path / rel
+            if p.exists() and p.is_file():
+                return rel
+        return None
+
+    def _prepare_mysql_seed_sql(self, project_path: Path, seed_rel_path: str) -> str:
+        """Create a .deploy folder and copy the seed SQL there for Docker context.
+        
+        Since Docker-in-Docker cannot easily bind-mount host files, we use
+        a small build context (.deploy/) and COPY the file into the DB image.
+        """
+        deploy_dir = project_path / ".deploy"
+        deploy_dir.mkdir(parents=True, exist_ok=True)
+        
+        src = project_path / seed_rel_path
+        dst = deploy_dir / "seed.sql"
+        
+        import shutil
+        shutil.copy2(str(src), str(dst))
+        
+        logger.info("Prepared DB seed at %s", dst)
+        return "seed.sql"
+
+
 # Singleton
 docker_builder = DockerBuilder()

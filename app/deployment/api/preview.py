@@ -27,6 +27,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from app.deployment.core.config import settings
 from app.deployment.services.deployer.pipeline import deployment_store, project_store
 from app.deployment.services.docker.client import docker_client
+from app.db.database import SessionLocal
+from app.models.schema import Project as DBProject
 
 logger = logging.getLogger(__name__)
 
@@ -1396,6 +1398,61 @@ def _is_probably_static_asset(path: str) -> bool:
     if p.startswith("assets/") or p.startswith("static/"):
         return True
     # Common file extensions served by the frontend container.
+    return p.endswith(
+        (
+            ".html",
+            ".htm",
+            ".js",
+            ".mjs",
+            ".css",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".svg",
+            ".ico",
+            ".json",
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".eot",
+            ".txt",
+            ".map",
+            ".pdf",
+        )
+    )
+
+
+def _get_project_deploy_mode(project_id: str, deployment: Any) -> str:
+    """Determine the effective deploy mode using DB type with heuristic fallback."""
+    deploy_mode = (deployment.deploy_mode or "").strip().lower()
+
+    # Step 1: Explicit DB lookup (most reliable)
+    try:
+        with SessionLocal() as db:
+            db_project = db.query(DBProject).filter(DBProject.id == project_id).first()
+            if db_project and db_project.assignment and db_project.assignment.project_type:
+                p_type = db_project.assignment.project_type.name.lower()
+                if p_type == "frontend":
+                    return "frontend-only"
+                if p_type == "backend":
+                    return "backend-only"
+                if p_type in ("project", "fullstack"):
+                    return "fullstack"
+    except Exception as e:
+        logger.warning("DB project type lookup failed for %s: %s", project_id, e)
+
+    # Step 2: Heuristic fallback
+    if deploy_mode in ("", "auto", "unknown"):
+        known_services = {sp.service for sp in (deployment.service_ports or [])}
+        if "backend" in known_services and not any(s in known_services for s in ("frontend", "app", "client", "web", "ui")):
+            return "backend-only"
+        if any(s in known_services for s in ("frontend", "app", "client", "web", "ui")):
+            return "frontend-only"
+        if len(known_services) == 1:
+            return "frontend-only"
+
+    return deploy_mode or "frontend-only"
     for ext in (
         ".js",
         ".mjs",
@@ -1559,7 +1616,7 @@ async def preview_index(project_id: str, request: Request):
             return RedirectResponse(url=f"{canonical_path}?{request.url.query}", status_code=307)
         return RedirectResponse(url=canonical_path, status_code=307)
 
-    deploy_mode = (deployment.deploy_mode or "").strip().lower()
+    deploy_mode = _get_project_deploy_mode(project_id, deployment)
 
     # UX parity with v1:
     # - frontend-only: open app directly
@@ -1568,12 +1625,22 @@ async def preview_index(project_id: str, request: Request):
     if deploy_mode == "backend-only":
         return HTMLResponse(_swagger_ui_html(project_id))
 
-    if deploy_mode == "fullstack":
+    if deploy_mode in ("fullstack", "frontend-only"):
         base = _get_service_url(deployment, "frontend") or _get_service_url(deployment)
         if base:
             known = {sp.service for sp in (deployment.service_ports or [])}
-            rewrite_api_base = f"/preview/{project_id}/backend" if "backend" in known else None
-            return await _proxy_request_to(project_id, base, "", request, prefix=f"/preview/{project_id}", rewrite_api_base=rewrite_api_base)
+            # For fullstack, we use the root preview URL as the base.
+            # Our internal Nginx config (in compose.py) already handles /api proxying to backend.
+            rewrite_api_base = f"/preview/{project_id}" if "backend" in known else None
+            
+            return await _proxy_request_to(
+                project_id, 
+                base, 
+                "", 
+                request, 
+                prefix=f"/preview/{project_id}", 
+                rewrite_api_base=rewrite_api_base
+            )
 
     # Return service map as HTML or JSON
     services = []
@@ -2138,15 +2205,12 @@ async def preview_service_proxy(project_id: str, service: str, request: Request,
         full_subpath = f"{service}/{path}" if path else service
         prefix = f"/preview/{project_id}"
 
-        deploy_mode = (deployment.deploy_mode or "").strip().lower()
+        deploy_mode = _get_project_deploy_mode(project_id, deployment)
         backend_base = None
         if deploy_mode in {"backend-only", "fullstack"}:
             backend_base = _get_service_url(deployment, "backend")
 
         should_route_to_backend = False
-        # Backend-only: keep normal routing to the primary service, but strip
-        # Origin/Referer only for API-like paths. This avoids surprising behavior
-        # for non-API routes while still working around strict upstream CORS.
         sub_l = full_subpath.lstrip("/").lower()
         api_like_backend_only = deploy_mode == "backend-only" and (
             sub_l == "api"
@@ -2166,7 +2230,7 @@ async def preview_service_proxy(project_id: str, service: str, request: Request,
                 should_route_to_backend = True
             else:
                 seg = full_subpath.lstrip("/").split("/", 1)[0]
-                if seg and seg in _backend_path_prefixes(project_id):
+                if (seg and seg in _backend_path_prefixes(project_id)) or (sub_l == "api" or sub_l.startswith("api/")):
                     should_route_to_backend = True
 
         if should_route_to_backend:
@@ -2175,8 +2239,9 @@ async def preview_service_proxy(project_id: str, service: str, request: Request,
             strip_request_origin = True
         else:
             base = _get_service_url(deployment)
-            # Only rewrite when the primary service is the frontend.
-            if frontend_base and base != frontend_base:
+            if deploy_mode == "fullstack" and "backend" in known:
+                rewrite_api_base = f"/preview/{project_id}"
+            else:
                 rewrite_api_base = None
 
         path = full_subpath
