@@ -4,11 +4,12 @@ from sqlalchemy.orm import Session
 
 from app.db.database import get_db
 from app.utils.validator import get_current_user
-from .dto import ProjectResponse, ProjectUpdateGradingRequest
+from .dto import ProjectResponse, ProjectUpdateGradingRequest, ProjectSourceCodeResponse
 from .service import (
     get_project_service,
     get_projects_by_assignment_service,
-    update_project_grading_service
+    update_project_grading_service,
+    get_project_source_code_service
 )
 
 #add get all
@@ -34,6 +35,18 @@ def get_project_endpoint(
 ):
     try:
         data = get_project_service(db, current_user, project_id)
+        return data
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+@router.get("/{project_id}/sourcecode", response_model=ProjectSourceCodeResponse)
+def get_project_source_code_endpoint(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        data = get_project_source_code_service(db, current_user, project_id)
         return data
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
