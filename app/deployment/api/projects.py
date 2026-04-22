@@ -13,7 +13,7 @@ import subprocess
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 
 from app.deployment.core.config import settings
-from app.deployment.core.exceptions import NotFoundError
+
 from app.deployment.models.project import ProjectMetadata
 from app.deployment.services.analyzer.file_scanner import build_file_tree
 from app.deployment.services.deployer.pipeline import project_store, run_analysis
@@ -215,126 +215,6 @@ async def inspect_github_repo(repoUrl: str = Form(""), repo_url: str = Form(""))
         return {"folders": folders}
 
 
-@router.get("/mock/list")
-async def list_mock_projects():
-    """List local mock project folders for quick demo imports."""
-    base = Path(settings.data_dir) / "projects"
-    if not base.exists():
-        return []
-    return [
-        {"name": p.name, "path": str(p)}
-        for p in sorted(base.iterdir())
-        if p.is_dir() and not p.name.startswith(".")
-    ]
-
-
-@router.post("/mock/import")
-async def import_mock_project(
-    background_tasks: BackgroundTasks,
-    folder: str = Form(...),
-    name: str = Form(""),
-    projectType: str = Form("auto"),
-):
-    """Import a local mock folder into the managed projects area."""
-    source = Path(folder)
-    if not source.exists() or not source.is_dir():
-        raise HTTPException(status_code=404, detail="Mock folder not found")
-
-    project_id = str(uuid.uuid4())
-    project_dir = Path(settings.projects_dir) / project_id
-    shutil.copytree(source, project_dir)
-
-    project = ProjectMetadata(
-        project_id=project_id,
-        name=name or source.name,
-        project_type=projectType if projectType != "auto" else "unknown",
-        uploaded_at=datetime.now(),
-    )
-    project_store.save(project)
-    background_tasks.add_task(run_analysis, project_id, str(project_dir))
-
-    return {
-        "projectId": project_id,
-        "project_id": project_id,
-        "name": project.name,
-        "status": "analyzing",
-    }
-
-@router.post("/mock/earai")
-async def import_mock_earai(background_tasks: BackgroundTasks):
-    """Quick-import a built-in EarAI demo FastAPI project for testing/demo purposes."""
-    import textwrap
-
-    project_id = str(uuid.uuid4())
-    project_dir = Path(settings.projects_dir) / project_id
-    project_dir.mkdir(parents=True, exist_ok=True)
-
-    _MAIN = textwrap.dedent(
-        '''
-        """EarAI Demo — sample FastAPI backend."""
-        from fastapi import FastAPI
-        from pydantic import BaseModel
-
-        app = FastAPI(title="EarAI Demo")
-
-
-        class EarRequest(BaseModel):
-            text: str
-            lang: str = "th"
-
-
-        @app.get("/")
-        def root():
-            return {"service": "EarAI", "status": "ok"}
-
-
-        @app.post("/transcribe")
-        def transcribe(req: EarRequest):
-            return {"text": req.text, "lang": req.lang, "result": "transcribed"}
-
-
-        @app.get("/health")
-        def health():
-            return {"status": "healthy"}
-        '''
-    ).lstrip()
-
-    _DOCKERFILE = textwrap.dedent(
-        """
-        FROM python:3.11-slim
-        WORKDIR /app
-        COPY requirements.txt .
-        RUN pip install --no-cache-dir -r requirements.txt
-        COPY . .
-        EXPOSE 8000
-        CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
-        """
-    ).lstrip()
-
-    (project_dir / "main.py").write_text(_MAIN, encoding="utf-8")
-    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
-    (project_dir / "Dockerfile").write_text(_DOCKERFILE, encoding="utf-8")
-    (project_dir / "README.md").write_text(
-        "# EarAI Demo\n\nSample FastAPI project — auto-generated for demo.\n",
-        encoding="utf-8",
-    )
-
-    project = ProjectMetadata(
-        project_id=project_id,
-        name="EarAI Demo",
-        project_type="fastapi",
-        uploaded_at=datetime.now(),
-    )
-    project_store.save(project)
-    background_tasks.add_task(run_analysis, project_id, str(project_dir))
-
-    return {
-        "projectId": project_id,
-        "project_id": project_id,
-        "name": "EarAI Demo",
-        "status": "analyzing",
-        "message": "EarAI demo project imported. Analysis running in background.",
-    }
 
 # ── Re-analyse ───────────────────────────────────────────────────────
 
