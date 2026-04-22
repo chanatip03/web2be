@@ -4,9 +4,9 @@ Pulls a .tar.gz bundle from Cloudflare R2, runs it as Docker containers,
 and serves the deployed web app through the existing preview proxy.
 
 Endpoints match the pattern the frontend page.tsx already calls:
-  POST   /api/project/{submission_id}/preview/start   — launch / re-use
-  GET    /api/project/{submission_id}/preview/status  — poll status
-  DELETE /api/project/{submission_id}/preview/stop    — manual teardown
+    POST   /api/project/{submission_id}/preview/start   — launch / re-use
+    GET    /api/project/{submission_id}/preview/status  — poll status
+    DELETE /api/project/{submission_id}/preview/stop    — manual teardown
 """
 
 from __future__ import annotations
@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/project", tags=["Submission Preview"])
 
-# ── 2-hour TTL ───────────────────────────────────────────────────────────────
-_TTL_SECONDS = 2 * 60 * 60   # 2 hours
+# ── Preview TTL ──────────────────────────────────────────────────────────────
+_TTL_SECONDS = settings.preview_ttl_seconds
 
 # ── In-memory session store ───────────────────────────────────────────────────
 # Keyed by submission_id.  Persisted only for the process lifetime so a server
@@ -55,6 +55,8 @@ class PreviewSession(BaseModel):
     )
     compose_project: str = ""
     runtime_dir: str = ""
+    bundle_path: str = ""
+    loaded_images: List[str] = Field(default_factory=list)
     service_ports: List[Dict[str, Any]] = Field(default_factory=list)
 
     @property
@@ -91,12 +93,13 @@ def _download_bundle(submission_id: str, target_path: Path) -> None:
 
 
 def _teardown(submission_id: str) -> None:
-    """Stop compose services and remove runtime directory."""
+    """Stop compose services and remove runtime artifacts and loaded images."""
     session = _sessions.get(submission_id)
     if not session:
         return
 
     runtime = Path(session.runtime_dir)
+    bundle_path = Path(session.bundle_path) if session.bundle_path else None
     project = session.compose_project
 
     logger.info("Tearing down preview for %s (compose_project=%s)", submission_id, project)
@@ -111,6 +114,15 @@ def _teardown(submission_id: str) -> None:
             shutil.rmtree(runtime, ignore_errors=True)
     except Exception as exc:
         logger.warning("rmtree failed for %s: %s", submission_id, exc)
+
+    try:
+        if bundle_path and bundle_path.exists():
+            bundle_path.unlink(missing_ok=True)
+    except Exception as exc:
+        logger.warning("bundle cleanup failed for %s: %s", submission_id, exc)
+
+    if session.loaded_images:
+        docker_client.remove_images(session.loaded_images)
 
     session.status = "stopped"
     session.preview_url = None
@@ -149,6 +161,7 @@ def _launch_bundle(submission_id: str) -> PreviewSession:
     try:
         # 1. Download from R2
         _download_bundle(submission_id, bundle_path)
+        session.bundle_path = str(bundle_path)
 
         # 2. run_from_bundle: extract → docker load → compose up
         compose_project = _compose_project(submission_id)
@@ -164,6 +177,7 @@ def _launch_bundle(submission_id: str) -> PreviewSession:
         session.preview_url = result.get("primary_url")
         session.compose_project = compose_project
         session.runtime_dir = str(runtime)
+        session.loaded_images = result.get("image_refs", [])
         session.service_ports = result.get("service_ports", [])
 
         logger.info(
@@ -189,7 +203,7 @@ async def start_preview(submission_id: str, background_tasks: BackgroundTasks):
     - If already running: returns immediately with current URL.
     - If starting: returns status='starting'; poll /status.
     - If stopped or error: re-launches.
-    - Container auto-stops after 2 hours.
+    - Container auto-stops after the configured preview TTL.
     """
     existing = _sessions.get(submission_id)
 

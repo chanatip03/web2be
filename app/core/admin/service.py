@@ -1,5 +1,6 @@
 from datetime import datetime
 from pathlib import Path
+from threading import Lock, Timer
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -7,9 +8,11 @@ from sqlalchemy.orm import Session
 from app.core.assignment.repository import get_assignment_by_id
 from app.core.classroom.repository import get_classroom_by_id
 from app.core.submission.fs import read_manifest
+from app.deployment.core.config import settings
 from app.deployment.core.exceptions import DockerError
 from app.deployment.services.docker.client import docker_client
 from app.deployment.models.deployment import DeploymentStatus
+from app.deployment.services.deployer.state_sync import refresh_deployment_state
 from app.deployment.services.enhanced.health_checker import health_checker
 from app.deployment.services.deployer.pipeline import deployment_store
 
@@ -20,6 +23,10 @@ from .dto import (
     AdminTeacherRequestRow,
     AdminTeacherRow,
 )
+
+
+_cleanup_timers: dict[str, Timer] = {}
+_cleanup_timers_lock = Lock()
 
 
 def create_admin(db: Session, email: str, password: str):
@@ -126,6 +133,73 @@ def _normalize_container_status(raw_status: str | None) -> str:
     return status_value or "unknown"
 
 
+def _schedule_stopped_deployment_cleanup(deployment_id: str) -> None:
+    delay_seconds = max(0, settings.stopped_deployment_cleanup_delay_seconds)
+
+    with _cleanup_timers_lock:
+        existing_timer = _cleanup_timers.pop(deployment_id, None)
+        if existing_timer is not None:
+            existing_timer.cancel()
+
+        cleanup_timer = Timer(delay_seconds, _cleanup_stopped_deployment_runtime, args=(deployment_id,))
+        cleanup_timer.daemon = True
+        _cleanup_timers[deployment_id] = cleanup_timer
+        cleanup_timer.start()
+
+
+def _collect_deployment_image_refs(deployment: DeploymentStatus) -> list[str]:
+    image_refs: list[str] = []
+
+    if deployment.image_tags:
+        for image_ref in deployment.image_tags.values():
+            if image_ref and image_ref not in image_refs:
+                image_refs.append(image_ref)
+
+    if deployment.image_tag and deployment.image_tag not in image_refs:
+        image_refs.append(deployment.image_tag)
+
+    return image_refs
+
+
+def _cleanup_stopped_deployment_runtime(deployment_id: str) -> None:
+    try:
+        deployment = deployment_store.get(deployment_id)
+        if not deployment:
+            return
+
+        deployment = refresh_deployment_state(deployment)
+        if deployment.status == "running" or deployment.container_state == "running":
+            deployment_store.save(deployment)
+            return
+
+        if deployment.compose_project and deployment.compose_file_path:
+            compose_dir = str(Path(deployment.compose_file_path).parent)
+            docker_client.compose_down(compose_dir, deployment.compose_project, remove_volumes=True)
+        elif deployment.container_id:
+            docker_client.stop_container(deployment.container_id)
+            docker_client.remove_container(deployment.container_id)
+
+        image_refs = _collect_deployment_image_refs(deployment)
+        if image_refs:
+            docker_client.remove_images(image_refs)
+
+        deployment.status = "stopped"
+        deployment.container_state = "removed"
+        deployment.container_id = None
+        deployment.preview_url = None
+        deployment.api_url = None
+        deployment.host_port = None
+        deployment.extra_ports = []
+        deployment.service_ports = []
+        deployment.updated_at = datetime.now()
+        deployment_store.save(deployment)
+    finally:
+        with _cleanup_timers_lock:
+            timer = _cleanup_timers.get(deployment_id)
+            if timer is not None and not timer.is_alive():
+                _cleanup_timers.pop(deployment_id, None)
+
+
 PREFERRED_RUNTIME_SERVICES = ("frontend", "backend", "app", "web")
 
 
@@ -219,8 +293,16 @@ async def get_admin_containers(db: Session, current_user: dict) -> list[AdminCon
     _ensure_admin(current_user)
 
     rows: list[AdminContainerRow] = []
-    deployments = sorted(
-        deployment_store.list_all(),
+    deployments: list[DeploymentStatus] = []
+    for stored_deployment in deployment_store.list_all():
+        refreshed_deployment = refresh_deployment_state(stored_deployment)
+
+        if refreshed_deployment.model_dump() != stored_deployment.model_dump():
+            deployment_store.save(refreshed_deployment)
+
+        deployments.append(refreshed_deployment)
+
+    deployments.sort(
         key=lambda deployment: deployment.updated_at,
         reverse=True,
     )
@@ -317,3 +399,4 @@ def stop_admin_container(deployment_id: str, current_user: dict) -> None:
     deployment.container_state = "stopped"
     deployment.updated_at = datetime.now()
     deployment_store.save(deployment)
+    _schedule_stopped_deployment_cleanup(deployment_id)

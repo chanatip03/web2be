@@ -37,6 +37,7 @@ services:
       SUBMISSIONS_DIR: /app/data/submissions
       RESULTS_DIR: /app/data/security_scan_results
       DOCKER_HOST: unix:///var/run/docker.sock
+      BUNDLE_ALLOW_PULL_DB_IMAGE: "true"
 
       DATABASE_HOST: database
       DATABASE_PORT: 5432

@@ -179,6 +179,14 @@ class DockerClient:
         except Exception:
             pass
 
+    def remove_images(self, image_refs: List[str]) -> None:
+        for image_ref in image_refs:
+            try:
+                self.client.images.remove(image=image_ref, force=False, noprune=False)
+                logger.info("Removed image %s", image_ref)
+            except Exception as exc:
+                logger.warning("Failed to remove image %s: %s", image_ref, exc)
+
     # ── Compose ──────────────────────────────────────────────────
 
     def compose_up(
