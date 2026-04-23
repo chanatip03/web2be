@@ -268,6 +268,7 @@ def _create_submission_records(
     source_ref: str | None,
     env: str | None,
     execution_mode: str,
+    submission_uuid: str,
     is_late: bool = False,
 ) -> Project:
     """Create Project and conditionally SubmissionOf.
@@ -290,6 +291,7 @@ def _create_submission_records(
         group_id=group_id if is_group else None,
         student_id=None if is_group else student_id,
         submission_type=submission_type,
+        submission_uuid=submission_uuid,
         project_source_url=initial_source_url,
         env=env or execution_mode,
         is_late=is_late,
@@ -446,6 +448,7 @@ async def create_submission_service(
         source_ref=source_ref,
         env=payload.env,
         execution_mode=execution_mode,
+        submission_uuid=submission_id,
         is_late=is_late,
     )
 
@@ -1047,10 +1050,49 @@ def resolve_submission_artifact_service(
     db: Session,
     current_user,
 ):
-    manifest = read_manifest(submission_id)
-    _ensure_submission_access(manifest, db, current_user)
-    artifact, artifact_path = resolve_artifact_path(manifest, artifact_id)
-    return artifact, artifact_path
+    from fastapi import HTTPException, status
+    import json
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        manifest = read_manifest(submission_id)
+        _ensure_submission_access(manifest, db, current_user)
+        artifact, artifact_path = resolve_artifact_path(manifest, artifact_id)
+        return artifact, artifact_path
+    except FileNotFoundError as exc:
+        # Fallback for Cybersecurity results if manifest is missing
+        project = db.query(Project).filter(Project.submission_uuid == submission_id).first()
+        if project and project.cybersecurity_result:
+            try:
+                cyber = project.cybersecurity_result
+                if isinstance(cyber, str):
+                    cyber = json.loads(cyber)
+                
+                if cyber.get("artifact_id") == artifact_id:
+                    # Found matching cyber artifact in DB, check for file in results_dir
+                    path = Path(settings.results_dir) / f"{submission_id}.json"
+                    if path.exists():
+                        from .manifest import ArtifactRecord
+                        return ArtifactRecord(
+                            artifact_id=artifact_id,
+                            name="scan.json",
+                            category="cyber",
+                            relative_path=f"{submission_id}.json",
+                            content_type="application/json"
+                        ), path
+            except Exception as inner_exc:
+                logger.error(f"Fallback resolution error: {inner_exc}")
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=f"Submission artifacts not found on server: {str(exc)}"
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error resolving artifact: {str(exc)}"
+        ) from exc
 
 
 async def activate_project_service(

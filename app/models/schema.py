@@ -209,6 +209,7 @@ class Project(Base):
     student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=True)
 
     submission_type = Column(Enum(SubmissionTypeEnum, name="submission_type_enum"), nullable=False)
+    submission_uuid = Column(String, nullable=True)
     project_source_url = Column(String, nullable=True)
     env = Column(String, nullable=False)
     container_id = Column(String, nullable=True)
