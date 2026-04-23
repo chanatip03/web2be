@@ -236,6 +236,9 @@ class Project(Base):
     def students(self):
         if self.group_id and self.group:
             return [member.student for member in self.group.members if member.student]
+        # Individual submission — return the directly linked student
+        if self.student:
+            return [self.student]
         return []
 
 class Group(Base):
