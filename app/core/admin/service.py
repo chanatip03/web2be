@@ -150,13 +150,20 @@ def _schedule_stopped_deployment_cleanup(deployment_id: str) -> None:
 def _collect_deployment_image_refs(deployment: DeploymentStatus) -> list[str]:
     image_refs: list[str] = []
 
+    def _append_image_ref(image_ref: str | None) -> None:
+        if image_ref and image_ref not in image_refs:
+            image_refs.append(image_ref)
+
     if deployment.image_tags:
         for image_ref in deployment.image_tags.values():
-            if image_ref and image_ref not in image_refs:
-                image_refs.append(image_ref)
+            _append_image_ref(image_ref)
 
-    if deployment.image_tag and deployment.image_tag not in image_refs:
-        image_refs.append(deployment.image_tag)
+    _append_image_ref(deployment.image_tag)
+
+    compose_services = {service.lower() for service in (deployment.compose_services or [])}
+    if "db" in compose_services:
+        compose_project = deployment.compose_project or deployment.project_id or deployment.deployment_id
+        _append_image_ref(f"{compose_project}-db:latest")
 
     return image_refs
 
