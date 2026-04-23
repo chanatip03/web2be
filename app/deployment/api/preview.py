@@ -162,11 +162,10 @@ async def root_spa_route_compat(request: Request):
 
 def _extract_go_gin_endpoints(server_src: str) -> list[dict[str, Any]]:
     """Best-effort extractor for Gin route registrations in Go code."""
-    prefix_by_var: dict[str, str] = {"router": ""}
+    prefix_by_var: dict[str, str] = {"router": "", "r": "", "e": "", "app": "", "mux": "", "server": ""}
 
     group_pat = re.compile(
-        r"^\s*(?P<var>[A-Za-z_][A-Za-z0-9_]*)\s*(?::=|=)\s*(?P<parent>[A-Za-z_][A-Za-z0-9_]*)\.Group\(\s*\"(?P<prefix>[^\"]*)\"\s*\)",
-        flags=re.MULTILINE,
+        r"(?P<var>[A-Za-z_][A-Za-z0-9_]*)\s*(?::=|=)\s*(?P<parent>[A-Za-z_][A-Za-z0-9_]*)\.Group\(\s*\"(?P<prefix>[^\"]*)\"\s*\)",
     )
     for m in group_pat.finditer(server_src):
         var = m.group("var")
@@ -176,8 +175,8 @@ def _extract_go_gin_endpoints(server_src: str) -> list[dict[str, Any]]:
         prefix_by_var[var] = _normalize_joined_path(parent_prefix, group_prefix)
 
     route_pat = re.compile(
-        r"^\s*(?P<var>[A-Za-z_][A-Za-z0-9_]*)\.(?P<method>GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\(\s*\"(?P<path>[^\"]+)\"",
-        flags=re.MULTILINE,
+        r"(?P<var>[A-Za-z_][A-Za-z0-9_]*)\.(?P<method>GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\(\s*\"(?P<path>[^\"]+)\"",
+        flags=re.IGNORECASE,
     )
 
     endpoints: list[dict[str, Any]] = []
@@ -407,7 +406,13 @@ def _extract_backend_endpoints_from_files(project_id: str) -> list[dict[str, Any
     candidates = []
     if backend_path:
         candidates.append(root / backend_path)
-    candidates.append(root / "backend")
+    
+    # Common backend folder names
+    for d in ("backend", "server", "api", "app", "srv"):
+        p = root / d
+        if p.exists() and p.is_dir():
+            candidates.append(p)
+    
     candidates.append(root)
 
     server_file = None
@@ -461,63 +466,77 @@ def _extract_backend_endpoints_from_files(project_id: str) -> list[dict[str, Any
         dedup = {(ep.get("method"), ep.get("path")): ep for ep in endpoints if ep.get("method") and ep.get("path")}
         return list(dedup.values())
 
-    require_map: dict[str, Path] = {}
-    for var, req in re.findall(r"const\s+(\w+)\s*=\s*require\(['\"]([^'\"]+)['\"]\)", server_src):
-        if not req.startswith("."):
-            continue
-        route_path = (server_file.parent / req).resolve()
-        if route_path.is_dir():
-            route_path = route_path / "index.js"
-        elif route_path.suffix == "":
-            route_path = route_path.with_suffix(".js")
-        require_map[var] = route_path
-
-    # ESM/TypeScript import map: `import { userRoute } from './routes/users'`
-    import_map: dict[str, Path] = {}
-    for var, imp in re.findall(
-        r"import\s*\{\s*(\w+)\s*\}\s*from\s*['\"]([^'\"]+)['\"]",
-        server_src,
-    ):
-        if not imp.startswith("."):
-            continue
-        route_path = (server_file.parent / imp).resolve()
-        if route_path.is_dir():
-            # Best-effort: common patterns
+    def _resolve_imp(imp_path: str) -> Path | None:
+        if not imp_path.startswith("."):
+            return None
+        # Handle .js extension in imports (common in ESM/TS)
+        clean_path = imp_path
+        if clean_path.endswith(".js"):
+            clean_path = clean_path[:-3]
+        elif clean_path.endswith(".ts"):
+            clean_path = clean_path[:-3]
+        
+        base_route = (server_file.parent / clean_path).resolve()
+        if base_route.is_dir():
             for leaf in ("index.ts", "index.js"):
-                p = route_path / leaf
-                if p.exists():
-                    route_path = p
-                    break
-        elif route_path.suffix == "":
-            # Try TS first then JS
-            ts = route_path.with_suffix(".ts")
-            js = route_path.with_suffix(".js")
-            if ts.exists():
-                route_path = ts
-            else:
-                route_path = js
-        import_map[var] = route_path
+                if (base_route / leaf).exists():
+                    return base_route / leaf
+        
+        for ext in (".ts", ".js", ".tsx", ".jsx"):
+            p = base_route.with_suffix(ext)
+            if p.exists():
+                return p
+        if base_route.exists() and base_route.is_file():
+            return base_route
+        return None
+
+    # Track both imports and requires
+    file_map: dict[str, Path] = {}
+    
+    # 1. Require: const x = require('./y')
+    for var, req in re.findall(r"(?:const|let|var|)\s*(\w+)\s*=\s*require\(['\"]([^'\"]+)['\"]\)", server_src):
+        res = _resolve_imp(req)
+        if res:
+            file_map[var] = res
+
+    # 2. Imports
+    # Default: import x from 'y'
+    for var, imp in re.findall(r"import\s+(\w+)\s+from\s+['\"]([^'\"]+)['\"]", server_src):
+        res = _resolve_imp(imp)
+        if res:
+            file_map[var] = res
+    
+    # Named: import { x, y as z } from 'y'
+    for block, imp in re.findall(r"import\s*\{([^}]+)\}\s*from\s*['\"]([^'\"]+)['\"]", server_src):
+        res = _resolve_imp(imp)
+        if res:
+            for part in block.split(","):
+                name = part.strip().split(" as ")[-1].strip()
+                if name:
+                    file_map[name] = res
+
+    # Star: import * as x from 'y'
+    for var, imp in re.findall(r"import\s*\*\s*as\s+(\w+)\s+from\s+['\"]([^'\"]+)['\"]", server_src):
+        res = _resolve_imp(imp)
+        if res:
+            file_map[var] = res
 
     service_routes: list[tuple[str, Path]] = []
-    for prefix, var in re.findall(r"app\.use\(\s*['\"]([^'\"]+)['\"]\s*,\s*(\w+)\s*\)", server_src):
-        route_file = require_map.get(var)
+    # Match app.use('/path', var), app.route('/path', var), router.use(...), etc.
+    mount_pat = re.compile(r"\.(?:use|route|mount)\(\s*['\"]([^'\"]+)['\"]\s*,\s*(\w+)\s*\)")
+    for prefix, var in mount_pat.findall(server_src):
+        route_file = file_map.get(var)
         if route_file and route_file.exists():
             service_routes.append((prefix, route_file))
-
-    # Hono-style route mounts: `app.route('/users', userRoute)`
-    hono_routes: list[tuple[str, str, Path]] = []
-    for prefix, var in re.findall(
-        r"\bapp\.route\(\s*['\"]([^'\"]+)['\"]\s*,\s*(\w+)\s*\)",
-        server_src,
-    ):
-        route_file = import_map.get(var)
-        if route_file and route_file.exists():
-            hono_routes.append((prefix, var, route_file))
 
     endpoints: list[dict[str, Any]] = []
 
     def _extract_body_fields(handler_src: str) -> list[str]:
-        match = re.search(r"const\s*{\s*([^}]+)\s*}\s*=\s*req\.body\s*;?", handler_src)
+        # Support both req.body and any variable that looks like a body (best effort)
+        match = re.search(r"const\s*{\s*([^}]+)\s*}\s*=\s*\w+\.body\s*;?", handler_src)
+        if not match:
+            match = re.search(r"const\s*{\s*([^}]+)\s*}\s*=\s*req\s*;?", handler_src) # some destructure req directly
+        
         if not match:
             return []
         raw = match.group(1)
@@ -539,11 +558,12 @@ def _extract_backend_endpoints_from_files(project_id: str) -> list[dict[str, Any
                 out.append(f)
         return out
 
-    for method, path in re.findall(r"app\.(get|post|put|delete|patch|options|head)\(\s*['\"]([^'\"]+)['\"]", server_src, flags=re.IGNORECASE):
+    # Scan server_file itself for direct routes
+    for method, path in re.findall(r"\.(get|post|put|delete|patch|options|head)\(\s*['\"]([^'\"]+)['\"]", server_src, flags=re.IGNORECASE):
         endpoints.append({"method": method.upper(), "path": _normalize_joined_path("", path)})
 
     route_pattern = re.compile(
-        r"router\.(get|post|put|delete|patch|options|head)\(\s*['\"]([^'\"]+)['\"]",
+        r"\b\w+\.(get|post|put|delete|patch|options|head)\(\s*['\"]([^'\"]+)['\"]",
         flags=re.IGNORECASE,
     )
     for prefix, route_file in service_routes:
@@ -570,27 +590,30 @@ def _extract_backend_endpoints_from_files(project_id: str) -> list[dict[str, Any
                 "body_fields": body_fields,
             })
 
-    # Hono routes: scan the mounted route files for `<var>.<method>('/path', ...)`
-    for prefix, var, route_file in hono_routes:
-        try:
-            src = route_file.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            continue
+    # FALLBACK: If we found very few endpoints, scan the entire 'routes' directory if it exists.
+    # This catches routes that are mounted dynamically or using patterns we didn't trace.
+    if len(endpoints) < 3:
+        for base in candidates:
+            rdir = base / "routes"
+            if rdir.exists() and rdir.is_dir():
+                for f in rdir.rglob("*.[jt]s"):
+                    if f in [route_file for _, route_file in service_routes]:
+                        continue
+                    try:
+                        src = f.read_text(encoding="utf-8", errors="ignore")
+                    except Exception:
+                        continue
+                    for m in route_pattern.finditer(src):
+                        method = m.group(1).upper()
+                        path = m.group(2)
+                        # Guess prefix based on filename if not traced
+                        guess_prefix = "/api" if "api" in f.name.lower() else ""
+                        endpoints.append({
+                            "method": method,
+                            "path": _normalize_joined_path(guess_prefix, path)
+                        })
 
-        # e.g. userRoute.get('/', ...)
-        method_pattern = re.compile(
-            rf"\b{re.escape(var)}\.(get|post|put|delete|patch|options|head)\(\s*['\"]([^'\"]+)['\"]",
-            flags=re.IGNORECASE,
-        )
-        for m in method_pattern.finditer(src):
-            method = m.group(1).upper()
-            path = m.group(2)
-            endpoints.append({
-                "method": method,
-                "path": _normalize_joined_path(prefix, path),
-            })
-
-    dedup = {(ep["method"], ep["path"]): ep for ep in endpoints}
+    dedup = {(ep.get("method"), ep.get("path")): ep for ep in endpoints if ep.get("method") and ep.get("path")}
     return list(dedup.values())
 
 
@@ -2144,6 +2167,8 @@ async def preview_swagger_ui(project_id: str):
     deployment = _find_deployment(project_id)
     if not deployment:
         return HTMLResponse("<h1>No active deployment</h1><p>Deploy the project first.</p>", 404)
+    # Use UUID for internal lookups, numeric ID for UI consistency if preferred
+    # But _swagger_ui_html uses spec_url which needs project_id
     return HTMLResponse(_swagger_ui_html(project_id))
 
 
@@ -2152,7 +2177,8 @@ async def preview_swagger_json(project_id: str):
     deployment = _find_deployment(project_id)
     if not deployment:
         return JSONResponse({"detail": "No active deployment"}, status_code=404)
-    return JSONResponse(_build_openapi_doc(project_id, deployment))
+    # CRITICAL: Use deployment.project_id (UUID) for internal logic
+    return JSONResponse(_build_openapi_doc(deployment.project_id, deployment))
 
 
 # ── Per-service HTTP Proxy ───────────────────────────────────────
