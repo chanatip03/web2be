@@ -38,8 +38,8 @@ router = APIRouter(tags=["Preview"])
 _PREVIEW_PROJECT_COOKIE = "preview_project_id"
 
 
-_UUID_RE = re.compile(
-    r"(?i)^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$"
+_PROJECT_ID_RE = re.compile(
+    r"(?i)^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32}|\d+)$"
 )
 
 
@@ -49,13 +49,13 @@ def _infer_project_id_from_referer(request: Request) -> Optional[str]:
         return None
 
     match = re.search(
-        r"(?i)/preview/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})(?:/|$)",
+        r"(?i)/preview/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32}|\d+)(?:/|$)",
         referer,
     )
     if not match:
         return None
     project_id = match.group(1)
-    if not _UUID_RE.match(project_id):
+    if not _PROJECT_ID_RE.match(project_id):
         return None
     return project_id
 
@@ -108,7 +108,7 @@ def _infer_project_id_from_request(request: Request) -> Optional[str]:
     if project_id:
         return project_id
     cookie = request.cookies.get(_PREVIEW_PROJECT_COOKIE)
-    if cookie and _UUID_RE.match(cookie):
+    if cookie and _PROJECT_ID_RE.match(cookie):
         return cookie
     # Avoid cross-project collisions: only infer without context when there is
     # exactly one active deployment.
@@ -122,13 +122,13 @@ def _infer_project_id_for_frontend_compat(request: Request) -> Optional[str]:
     like /register), preferring fullstack deployments when multiple are active.
     """
     project_id = _infer_project_id_from_referer(request)
-    if project_id and _UUID_RE.match(project_id):
+    if project_id and _PROJECT_ID_RE.match(project_id):
         dep = _find_deployment(project_id)
         if dep and (dep.deploy_mode or "").lower() != "backend-only":
             return project_id
 
     cookie = request.cookies.get(_PREVIEW_PROJECT_COOKIE)
-    if cookie and _UUID_RE.match(cookie):
+    if cookie and _PROJECT_ID_RE.match(cookie):
         dep = _find_deployment(cookie)
         if dep and (dep.deploy_mode or "").lower() != "backend-only":
             return cookie
@@ -1097,7 +1097,18 @@ def _find_deployment(project_id: str):
     updated successful deployment. This avoids routing to stale ports when a
     project has multiple historical "success" records.
     """
-    all_deps = [dep for dep in deployment_store.list_all() if dep.project_id == project_id]
+    effective_id = project_id
+    # Support integer project IDs by looking up their submission_uuid in DB
+    if project_id.isdigit():
+        try:
+            with SessionLocal() as db:
+                db_project = db.query(DBProject).filter(DBProject.id == int(project_id)).first()
+                if db_project and db_project.submission_uuid:
+                    effective_id = db_project.submission_uuid
+        except Exception as e:
+            logger.warning("Failed to resolve project ID %s: %s", project_id, e)
+
+    all_deps = [dep for dep in deployment_store.list_all() if dep.project_id == effective_id]
     if not all_deps:
         return None
 
@@ -1458,33 +1469,6 @@ def _get_project_deploy_mode(project_id: str, deployment: Any) -> str:
             return "frontend-only"
 
     return deploy_mode or "frontend-only"
-    for ext in (
-        ".js",
-        ".mjs",
-        ".cjs",
-        ".css",
-        ".map",
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".gif",
-        ".svg",
-        ".webp",
-        ".ico",
-        ".txt",
-        ".json",
-        ".woff",
-        ".woff2",
-        ".ttf",
-        ".eot",
-        ".otf",
-        ".mp4",
-        ".webm",
-        ".pdf",
-    ):
-        if p.endswith(ext):
-            return True
-    return False
 
 
 def _normalized_filename_token(value: str) -> str:
@@ -2101,7 +2085,7 @@ async def preview_duplicate_project_uploads(
     # Only treat this as a "duplicate id" compat path when the dup segment
     # looks like a UUID. Otherwise it may be a real service name (e.g. "backend")
     # and we must not hijack the request.
-    if not _UUID_RE.match(dup_project_id):
+    if not _PROJECT_ID_RE.match(dup_project_id):
         return await preview_service_proxy(project_id, dup_project_id, request, path=f"uploads/{path}" if path else "uploads")
 
     if dup_project_id == project_id:
@@ -2126,7 +2110,7 @@ async def preview_duplicate_project_api(
     # Only treat this as a "duplicate id" compat path when the dup segment
     # looks like a UUID. Otherwise it may be a real service name (e.g. "backend")
     # and we must not hijack the request.
-    if not _UUID_RE.match(dup_project_id):
+    if not _PROJECT_ID_RE.match(dup_project_id):
         return await preview_service_proxy(project_id, dup_project_id, request, path=f"api/{path}" if path else "api")
 
     if dup_project_id == project_id:

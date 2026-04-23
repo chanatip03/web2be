@@ -192,9 +192,8 @@ class DockerClient:
         host_project_dir = self._translate_to_host_path(project_dir)
         
         cmd = ["docker", "compose"]
-        if host_project_dir != project_dir:
-            # If translated, we MUST use -f because the host daemon needs the host-valid path
-            cmd += ["-f", f"{host_project_dir}/docker-compose.yml"]
+        # Use the container-internal path for -f so the CLI can read it
+        cmd += ["-f", f"{project_dir}/docker-compose.yml"]
             
         if project_name:
             cmd += ["-p", project_name]
@@ -206,7 +205,7 @@ class DockerClient:
 
         result = subprocess.run(
             cmd,
-            cwd=project_dir if host_project_dir == project_dir else "/",
+            cwd=project_dir,
             capture_output=True,
             text=True,
             timeout=300,
@@ -383,23 +382,40 @@ class DockerClient:
 # Singleton
     def _translate_to_host_path(self, path: str) -> str:
         """Translate a container-internal path to a host-valid path if HOST_DATA_DIR is set."""
-        host_data_dir = os.environ.get("HOST_DATA_DIR")
+        from app.deployment.core.config import settings
+        host_data_dir = settings.host_data_dir or os.environ.get("HOST_DATA_DIR")
         if not host_data_dir:
             return path
             
-        # The internal data_dir is typically /app/app/deployment/data
-        # We need to resolve it relative to settings.data_dir
-        from app.deployment.core.config import settings
+        # Internal data_dir is typically /app/app/deployment/data
         internal_data_dir = settings.data_dir
         
-        # Normalize paths
+        # Normalize paths for comparison (forward slashes)
         abs_path = os.path.abspath(path).replace("\\", "/")
         abs_internal = os.path.abspath(internal_data_dir).replace("\\", "/")
         host_data_dir = host_data_dir.replace("\\", "/")
         
+        # Helper to normalize and convert to Docker-friendly host paths
+        def _cleanup_path(p: str) -> str:
+            # Strip leading slash from Windows drive paths (e.g. /C:/Users -> C:/Users)
+            if p.startswith("/") and len(p) > 2 and p[2] == ":":
+                p = p[1:]
+            # Convert C:/Users -> /c/Users (standard Docker host path format)
+            if len(p) > 1 and p[1] == ":":
+                drive = p[0].lower()
+                p = f"/{drive}{p[2:]}"
+            return p
+            
+        abs_path = _cleanup_path(abs_path)
+        abs_internal = _cleanup_path(abs_internal)
+        host_data_dir = _cleanup_path(host_data_dir)
+        
+        logger.debug("Path translation: abs_path=%s, abs_internal=%s, host_data_dir=%s", abs_path, abs_internal, host_data_dir)
+        
         if abs_path.startswith(abs_internal):
             relative = abs_path[len(abs_internal):].lstrip("/")
             translated = f"{host_data_dir}/{relative}" if relative else host_data_dir
+            logger.info("Translated internal path %s to host path %s", path, translated)
             return translated
             
         return path

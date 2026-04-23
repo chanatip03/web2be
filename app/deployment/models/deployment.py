@@ -45,6 +45,7 @@ class DeploymentStatus(BaseModel):
 
     deployment_id: str
     project_id: str
+    project_db_id: Optional[int] = None
     project_name: str = ""
     deploy_mode: str = "auto"  # frontend-only | backend-only | fullstack
     status: str = "analyzing"

@@ -1921,6 +1921,13 @@ class DockerBuilder:
         if db_seed_mount and db_type in {"mysql", "mariadb"}:
             db_seed_mount = self._prepare_mysql_seed_sql(project_path, db_seed_mount)
 
+        # Determine if frontend uses Nginx (static) or Node (ssr/buildless)
+        frontend_root = (project_path / str((analysis.frontend_info or {}).get("path") or "frontend").strip()) if analysis else (project_path / "frontend")
+        if not frontend_root.exists():
+            frontend_root = project_path
+        is_node_fe = self._is_nextjs_ssr_frontend(frontend_root) or self._frontend_uses_buildless_runtime(frontend_root)
+        frontend_is_nginx = not is_node_fe
+
         # generate_compose_yaml now returns (yaml, port_map)
         compose_content, port_map = generate_compose_yaml(
             project_name=config.project_id,
@@ -1933,6 +1940,7 @@ class DockerBuilder:
             db_ephemeral=settings.db_ephemeral_default,
             db_tmpfs_size=settings.db_tmpfs_size,
             environment=config.environment,
+            frontend_is_nginx=frontend_is_nginx,
         )
 
         compose_path = project_path / "docker-compose.yml"

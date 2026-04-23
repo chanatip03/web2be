@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import logging
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,8 @@ from typing import Optional
 import httpx
 from fastapi import BackgroundTasks, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.core.assignment.repository import get_assignment_by_id
 from app.core.classroom.repository import is_classroom_of_teacher
@@ -286,6 +289,7 @@ def _create_submission_records(
     # It will be updated to the R2 URL after upload completes in the background pipeline.
     initial_source_url = source_ref or ""
 
+    logger.info("Creating project record for assignment %s with UUID: %s", assignment_id, submission_uuid)
     project = Project(
         assignment_id=assignment_id,
         group_id=group_id if is_group else None,
@@ -678,6 +682,7 @@ async def _run_deployment_step(manifest: SubmissionManifest) -> None:
         DeploymentStatus(
             deployment_id=deployment_id,
             project_id=project_id,
+            project_db_id=manifest.project_db_id,
             project_name=project_name,
             status="analyzing",
             current_step=1,

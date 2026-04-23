@@ -92,6 +92,7 @@ def generate_compose_yaml(
     db_ephemeral: bool = False,
     db_tmpfs_size: str = "512m",
     environment: Dict[str, str] | None = None,
+    frontend_is_nginx: bool = True,
 ) -> Tuple[str, Dict[str, Dict[str, int]]]:
     """Produce a docker-compose YAML string with dynamic host ports.
 
@@ -218,10 +219,17 @@ def generate_compose_yaml(
             f"    image: {frontend_image}",
             "    ports:",
             f'      - "{frontend_host_port}:{frontend_port}"',
-            "    command:",
-            "      - /bin/sh",
-            "      - -c",
-            f'      - "{inner_sh}"',
+        ]
+        
+        if frontend_is_nginx:
+            lines += [
+                "    command:",
+                "      - /bin/sh",
+                "      - -c",
+                f'      - "{inner_sh}"',
+            ]
+
+        lines += [
             "    depends_on:",
             "      backend:",
             "        condition: service_started",

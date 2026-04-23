@@ -35,7 +35,7 @@ services:
       SNYK_TOKEN: ${SNYK_TOKEN}
       SUBMISSIONS_DIR: /app/data/submissions
       RESULTS_DIR: /app/data/security_scan_results
-      HOST_DATA_DIR: ${PWD}/app/deployment/data
+      HOST_DATA_DIR: ${HOST_DATA_DIR}
 
       DATABASE_HOST: database
       DATABASE_PORT: 5432

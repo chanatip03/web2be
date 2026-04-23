@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     data_dir: str = "./data"
     projects_dir: str = "./data/projects"
     deployments_dir: str = "./data/deployments"
+    host_data_dir: str = ""
+    submissions_dir: str = "/app/data/submissions"
 
     # ── Docker ───────────────────────────────────────────────────
     base_preview_port: int = 3000
