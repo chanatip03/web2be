@@ -766,7 +766,7 @@ async def _run_deployment_step(manifest: SubmissionManifest) -> None:
         try:
             import subprocess
             res = subprocess.run(
-                ["docker", "ps", "-q", "--filter", f"label=com.docker.compose.project={deployment.compose_project}"],
+                ["docker", "ps", "--format", "{{.Names}}", "--filter", f"label=com.docker.compose.project={deployment.compose_project}"],
                 capture_output=True, text=True
             )
             c_ids = [cid.strip() for cid in res.stdout.strip().split('\n') if cid.strip()]
@@ -781,7 +781,7 @@ async def _run_deployment_step(manifest: SubmissionManifest) -> None:
         try:
             import subprocess
             res = subprocess.run(
-                ["docker", "ps", "-q", "--latest"],
+                ["docker", "ps", "--format", "{{.Names}}", "--latest"],
                 capture_output=True, text=True
             )
             c_ids = [cid.strip() for cid in res.stdout.strip().split('\n') if cid.strip()]
@@ -1094,9 +1094,18 @@ async def activate_project_service(
             "error": existing.error,
         }
         
+    original_compose_project = f"activate-{submission_id}"
+    if project.container_resource:
+        import re
+        from app.utils.r2 import R2_PUBLIC_URL
+        key = project.container_resource.replace(R2_PUBLIC_URL.rstrip('/') + "/", "")
+        m = re.search(r"submissions/([^/]+)/", key)
+        if m:
+            original_compose_project = m.group(1)
+
     session = PreviewSession(
         submission_id=submission_id,
-        compose_project=f"activate-{submission_id}",
+        compose_project=original_compose_project,
         runtime_dir=str(Path(settings.deployments_dir) / "activations" / submission_id),
     )
     _sessions[submission_id] = session

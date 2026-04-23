@@ -189,7 +189,13 @@ class DockerClient:
         build: bool = True,
     ) -> str:
         """Run docker compose up -d in the given directory."""
+        host_project_dir = self._translate_to_host_path(project_dir)
+        
         cmd = ["docker", "compose"]
+        if host_project_dir != project_dir:
+            # If translated, we MUST use -f because the host daemon needs the host-valid path
+            cmd += ["-f", f"{host_project_dir}/docker-compose.yml"]
+            
         if project_name:
             cmd += ["-p", project_name]
         cmd += ["up", "-d"]
@@ -200,7 +206,7 @@ class DockerClient:
 
         result = subprocess.run(
             cmd,
-            cwd=project_dir,
+            cwd=project_dir if host_project_dir == project_dir else "/",
             capture_output=True,
             text=True,
             timeout=300,
@@ -216,7 +222,12 @@ class DockerClient:
         *,
         remove_volumes: bool = False,
     ) -> None:
+        host_project_dir = self._translate_to_host_path(project_dir)
+        
         cmd = ["docker", "compose"]
+        if host_project_dir != project_dir:
+            cmd += ["-f", f"{host_project_dir}/docker-compose.yml"]
+            
         if project_name:
             cmd += ["-p", project_name]
         cmd += ["down", "--remove-orphans"]
@@ -225,7 +236,7 @@ class DockerClient:
 
         subprocess.run(
             cmd, 
-            cwd=project_dir,
+            cwd=project_dir if host_project_dir == project_dir else "/",
             capture_output=True, 
             timeout=60
         )

@@ -229,6 +229,10 @@ class Project(Base):
     assignment = relationship("Assignment", back_populates="projects")
 
     @property
+    def group_name(self):
+        return self.group.name if self.group else None
+
+    @property
     def students(self):
         if self.group_id and self.group:
             return [member.student for member in self.group.members if member.student]
