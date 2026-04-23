@@ -410,7 +410,7 @@ async def create_submission_service(
                 detail="Group assignment requires a group. Please join or create a group first.",
             )
 
-    submission_id = uuid.uuid4().hex
+    submission_id = str(uuid.uuid4())
     execution_mode = _resolve_execution_mode_from_payload_or_assignment(payload, assignment)
     requires_testcase = execution_mode in {"frontend-only", "backend-only"} and bool(assignment.testcase_url)
     _ensure_submission_runtime_ready(

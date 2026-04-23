@@ -197,8 +197,9 @@ def _launch_bundle(submission_id: str) -> PreviewSession:
     dep.preview_url = session.preview_url
     dep.compose_project = session.compose_project
     if session.status == "running":
-        dep.service_ports = [ServicePortMapping(**sp) for sp in session.service_ports] if session.service_ports else None
-        dep.compose_services = [sp.get("service") for sp in session.service_ports if sp.get("service")] if session.service_ports else None
+        valid_ports = [sp for sp in (session.service_ports or []) if isinstance(sp, dict)]
+        dep.service_ports = [ServicePortMapping(**sp) for sp in valid_ports] if valid_ports else None
+        dep.compose_services = [sp.get("service") for sp in valid_ports if sp.get("service")] if valid_ports else None
         # Default to fullstack to ensure frontend/backend proxying handles edge cases
         if not dep.deploy_mode or dep.deploy_mode == "auto":
             dep.deploy_mode = "fullstack"

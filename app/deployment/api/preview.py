@@ -39,7 +39,7 @@ _PREVIEW_PROJECT_COOKIE = "preview_project_id"
 
 
 _UUID_RE = re.compile(
-    r"(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    r"(?i)^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$"
 )
 
 
@@ -49,7 +49,7 @@ def _infer_project_id_from_referer(request: Request) -> Optional[str]:
         return None
 
     match = re.search(
-        r"(?i)/preview/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:/|$)",
+        r"(?i)/preview/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})(?:/|$)",
         referer,
     )
     if not match:
@@ -1124,7 +1124,7 @@ def _get_service_url(deployment, service: Optional[str] = None) -> Optional[str]
     if service:
         if deployment.service_ports:
             for sp in deployment.service_ports:
-                if sp.service == service:
+                if sp.service == service and sp.url and sp.url.startswith("http"):
                     return sp.url
 
         # Metadata can be stale after restart; recover from compose runtime.
@@ -1136,10 +1136,13 @@ def _get_service_url(deployment, service: Optional[str] = None) -> Optional[str]
         # Fall back to primary: frontend > backend > app > first available
         for pref in ("frontend", "backend", "app"):
             for sp in deployment.service_ports:
-                if sp.service == pref:
+                if sp.service == pref and sp.url and sp.url.startswith("http"):
                     return sp.url
-
-        return deployment.service_ports[0].url
+        # last resort: first port with a valid url
+        for sp in deployment.service_ports:
+            if sp.url and sp.url.startswith("http"):
+                return sp.url
+        return None
 
     # Legacy fallback
     if deployment.preview_url:
@@ -1428,17 +1431,19 @@ def _get_project_deploy_mode(project_id: str, deployment: Any) -> str:
     deploy_mode = (deployment.deploy_mode or "").strip().lower()
 
     # Step 1: Explicit DB lookup (most reliable)
+    # Only attempt if project_id looks like an integer (DB projects.id is int, not UUID)
     try:
-        with SessionLocal() as db:
-            db_project = db.query(DBProject).filter(DBProject.id == project_id).first()
-            if db_project and db_project.assignment and db_project.assignment.project_type:
-                p_type = db_project.assignment.project_type.name.lower()
-                if p_type == "frontend":
-                    return "frontend-only"
-                if p_type == "backend":
-                    return "backend-only"
-                if p_type in ("project", "fullstack"):
-                    return "fullstack"
+        if project_id.isdigit():
+            with SessionLocal() as db:
+                db_project = db.query(DBProject).filter(DBProject.id == int(project_id)).first()
+                if db_project and db_project.assignment and db_project.assignment.project_type:
+                    p_type = db_project.assignment.project_type.name.lower()
+                    if p_type == "frontend":
+                        return "frontend-only"
+                    if p_type == "backend":
+                        return "backend-only"
+                    if p_type in ("project", "fullstack"):
+                        return "fullstack"
     except Exception as e:
         logger.warning("DB project type lookup failed for %s: %s", project_id, e)
 
@@ -2300,6 +2305,10 @@ async def _proxy_request_to(
     body_override: bytes | None = None,
 ) -> Response:
     """Forward an HTTP request to the upstream container."""
+    # Guard against missing or invalid base URLs before attempting proxy
+    if not base_url or not base_url.startswith("http"):
+        logger.warning("_proxy_request_to called with invalid base_url=%r, returning 502", base_url)
+        return HTMLResponse("<h1>Container not reachable</h1><p>The container may still be starting.</p>", status_code=502)
     # In Docker-in-Docker mode, the scanner container cannot reach student containers
     # via localhost (which resolves to the scanner itself). Use host.docker.internal
     # so the request reaches the Windows Docker Desktop host where student ports are bound.

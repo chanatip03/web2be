@@ -1,9 +1,9 @@
-"""Thin wrapper around the Docker SDK — isolates all Docker engine interactions."""
-
 from __future__ import annotations
 
 import logging
+import os
 import socket
+import subprocess
 from typing import Any, Dict, List, Optional
 
 from app.deployment.core.exceptions import DockerError
@@ -189,12 +189,12 @@ class DockerClient:
         build: bool = True,
     ) -> str:
         """Run docker compose up -d in the given directory."""
-        import subprocess
-
         cmd = ["docker", "compose"]
         if project_name:
             cmd += ["-p", project_name]
         cmd += ["up", "-d"]
+        if not build:
+            cmd += ["--no-build"]
         if build:
             cmd += ["--build"]
 
@@ -216,8 +216,6 @@ class DockerClient:
         *,
         remove_volumes: bool = False,
     ) -> None:
-        import subprocess
-
         cmd = ["docker", "compose"]
         if project_name:
             cmd += ["-p", project_name]
@@ -225,7 +223,40 @@ class DockerClient:
         if remove_volumes:
             cmd += ["--volumes"]
 
-        subprocess.run(cmd, cwd=project_dir, capture_output=True, timeout=60)
+        subprocess.run(
+            cmd, 
+            cwd=project_dir,
+            capture_output=True, 
+            timeout=60
+        )
+
+    def get_compose_port_mappings(self, project_name: str) -> List[Dict[str, Any]]:
+        """Query Docker for the actual host ports assigned to a compose project's services."""
+        try:
+            # Filters match labels applied by Docker Compose. 
+            # We use all=True because containers might be in 'created' or 'starting' state
+            # but still have their ports assigned in metadata.
+            containers = self.client.containers.list(
+                all=True, 
+                filters={"label": f"com.docker.compose.project={project_name}"}
+            )
+            mappings = []
+            for container in containers:
+                service = container.labels.get("com.docker.compose.service", "unknown")
+                ports = container.attrs.get("NetworkSettings", {}).get("Ports", {})
+                if not ports:
+                    continue
+                for c_port, host_bindings in ports.items():
+                    if host_bindings:
+                        mappings.append({
+                            "service": service,
+                            "container_port": int(c_port.split("/")[0]),
+                            "host_port": int(host_bindings[0]["HostPort"]),
+                        })
+            return mappings
+        except Exception as exc:
+            logger.warning("Failed to get compose port mappings for %s: %s", project_name, exc)
+            return []
 
     def get_compose_logs(
         self, project_dir: str, project_name: str | None = None, tail: int = 200,
@@ -339,4 +370,27 @@ class DockerClient:
 
 
 # Singleton
+    def _translate_to_host_path(self, path: str) -> str:
+        """Translate a container-internal path to a host-valid path if HOST_DATA_DIR is set."""
+        host_data_dir = os.environ.get("HOST_DATA_DIR")
+        if not host_data_dir:
+            return path
+            
+        # The internal data_dir is typically /app/app/deployment/data
+        # We need to resolve it relative to settings.data_dir
+        from app.deployment.core.config import settings
+        internal_data_dir = settings.data_dir
+        
+        # Normalize paths
+        abs_path = os.path.abspath(path).replace("\\", "/")
+        abs_internal = os.path.abspath(internal_data_dir).replace("\\", "/")
+        host_data_dir = host_data_dir.replace("\\", "/")
+        
+        if abs_path.startswith(abs_internal):
+            relative = abs_path[len(abs_internal):].lstrip("/")
+            translated = f"{host_data_dir}/{relative}" if relative else host_data_dir
+            return translated
+            
+        return path
+
 docker_client = DockerClient()
