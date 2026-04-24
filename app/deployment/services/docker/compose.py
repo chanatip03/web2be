@@ -92,6 +92,7 @@ def generate_compose_yaml(
     db_ephemeral: bool = False,
     db_tmpfs_size: str = "512m",
     environment: Dict[str, str] | None = None,
+    frontend_is_nginx: bool = True,
 ) -> Tuple[str, Dict[str, Dict[str, int]]]:
     """Produce a docker-compose YAML string with dynamic host ports.
 
@@ -164,7 +165,7 @@ def generate_compose_yaml(
             lines.append(f'      {k}: "{v}"')
 
     depends_on = []
-    if database_type:
+    if database_type and database_type.lower() != "sqlite":
         depends_on.append("db")
     if depends_on:
         lines.append("    depends_on:")
@@ -218,10 +219,17 @@ def generate_compose_yaml(
             f"    image: {frontend_image}",
             "    ports:",
             f'      - "{frontend_host_port}:{frontend_port}"',
-            "    command:",
-            "      - /bin/sh",
-            "      - -c",
-            f'      - "{inner_sh}"',
+        ]
+        
+        if frontend_is_nginx:
+            lines += [
+                "    command:",
+                "      - /bin/sh",
+                "      - -c",
+                f'      - "{inner_sh}"',
+            ]
+
+        lines += [
             "    depends_on:",
             "      backend:",
             "        condition: service_started",
@@ -231,7 +239,7 @@ def generate_compose_yaml(
         ]
 
     # ── Database service ─────────────────────────────────
-    if database_type:
+    if database_type and database_type.lower() != "sqlite":
         db_type = database_type.lower()
         db_image = _DB_IMAGES.get(db_type, f"{db_type}:latest")
         db_container_port = _DB_PORTS.get(db_type, 5432)

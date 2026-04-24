@@ -41,6 +41,7 @@ class SubmissionManifest(BaseModel):
     source_ref: Optional[str] = None
     env: Optional[str] = None
     testcase_source_url: Optional[str] = None
+    is_late: bool = False
     pipeline_status: str = "queued"
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
@@ -71,6 +72,7 @@ def build_initial_manifest(
     source_ref: Optional[str],
     env: Optional[str],
     testcase_source_url: Optional[str],
+    is_late: bool = False,
 ) -> SubmissionManifest:
     now = utc_now_iso()
     testcase_required = execution_mode in {"frontend-only", "backend-only"}
@@ -95,6 +97,7 @@ def build_initial_manifest(
         source_ref=source_ref,
         env=env,
         testcase_source_url=testcase_source_url,
+        is_late=is_late,
         pipeline_status="queued",
         created_at=now,
         updated_at=now,

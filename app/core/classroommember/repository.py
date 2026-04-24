@@ -43,4 +43,8 @@ def delete_classroom_member(db: Session, classroom_id: int, student_id: int):
     ).first()
     if member:
         db.delete(member)
+        db.flush()           # send DELETE to DB but keep transaction open
+        db.expunge(member)   # detach object so it survives after commit
         db.commit()
+        return member        # now safe to read fields after commit
+    return None

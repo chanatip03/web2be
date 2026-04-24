@@ -1,0 +1,16 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.db
+.pytest_cache
+.coverage
+htmlcov
+
+# Data directories (can be very large)
+data/
+app/deployment/data/
+app/deployment/data/previews/
+app/deployment/data/bundles/

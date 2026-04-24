@@ -59,11 +59,146 @@ def run_from_bundle(
         except Exception:
             pass
 
+    # 3. Final safety: rewrite any fixed host ports to 0 (dynamic) to avoid conflicts 
+    # and repair suspicious container ports (e.g. if they look like host ports > 1024).
+    compose_text = compose_file.read_text(encoding="utf-8", errors="replace")
+    
+    def _fix_ports(match):
+        host_p = match.group(1)
+        cont_p = int(match.group(2))
+        # If container port is suspiciously high, it's likely a bug in the bundle creation
+        if cont_p > 10000:
+            # Try to guess the intended port
+            new_cont_p = 80 if "frontend" in compose_text.lower() else 8000
+            logger.warning("Repairing suspicious container port %d -> %d", cont_p, new_cont_p)
+            cont_p = new_cont_p
+        return f'"0:{cont_p}"'
+
+    compose_text = re.sub(r'"(\d+):(\d+)"', _fix_ports, compose_text)
+
+    # 3b. Repair 'networks' block if it contains illegal 'image' or 'env_file' properties
+    if "networks:" in compose_text:
+        lines = compose_text.splitlines()
+        repaired_lines = []
+        in_networks = False
+        skip_next_if_list = False
+        
+        for line in lines:
+            stripped = line.strip()
+            # Detect exit from networks block (any non-indented line that isn't 'networks:')
+            if line and not line.startswith(" ") and stripped != "networks:":
+                in_networks = False
+            
+            if stripped == "networks:":
+                in_networks = True
+            
+            if in_networks:
+                if stripped.startswith("image:"):
+                    continue
+                if stripped.startswith("env_file:"):
+                    skip_next_if_list = True
+                    continue
+                if skip_next_if_list and stripped.startswith("-"):
+                    continue
+                skip_next_if_list = False
+                
+            repaired_lines.append(line)
+        compose_text = "\n".join(repaired_lines)
+
+    # 3c. Repair missing image properties (due to old bundler bug)
+    # Scan ALL services and inject image if missing.
+    if "services:" in compose_text:
+        lines = compose_text.splitlines()
+        repaired_lines = []
+        in_services = False
+
+        for i, line in enumerate(lines):
+            repaired_lines.append(line)
+            stripped = line.strip()
+
+            # Track when we enter/exit the services block
+            if not line.startswith(" ") and not line.startswith("#") and ":" in stripped:
+                in_services = (stripped == "services:")
+                continue
+
+            if not in_services:
+                continue
+
+            m = re.match(r"^ {2}([a-zA-Z0-9_-]+):", line)
+            if not m:
+                continue
+
+            service_name = m.group(1)
+
+            # Check if this service block already has an image line
+            has_image = False
+            j = i + 1
+            while j < len(lines):
+                next_line = lines[j]
+                # Stop at next service or top-level block
+                if next_line and not next_line.startswith(" "):
+                    break
+                if re.match(r"^ {2}[a-zA-Z0-9_-]+:", next_line):
+                    break
+                if next_line.strip().startswith("image:"):
+                    has_image = True
+                    break
+                j += 1
+
+            if has_image:
+                continue
+
+            # No image found — determine the correct one
+            block_text = "\n".join(lines[i:j]).lower()
+            tag = None
+
+            if service_name in ("frontend", "backend", "app"):
+                tag = f"deployer-{compose_project}-{service_name}:latest"
+                if service_name == "app":
+                    tag = f"deployer-{compose_project}:latest"
+            elif "mongo" in block_text or service_name in ("db", "mongodb"):
+                tag = "mongo:latest"
+            elif "postgres" in block_text or service_name == "postgres":
+                tag = "postgres:latest"
+            elif "mysql" in block_text or service_name == "mysql":
+                tag = "mysql:latest"
+            elif "redis" in block_text or service_name == "redis":
+                tag = "redis:latest"
+
+            if tag:
+                logger.warning("Repairing missing image for service '%s' -> %s", service_name, tag)
+                repaired_lines.append(f"    image: {tag}")
+
+        compose_text = "\n".join(repaired_lines)
+
+    # 3d. Relax 'service_healthy' -> 'service_started' in depends_on blocks.
+    # When we inject stock database images (mongo, postgres, etc.) the healthcheck may
+    # fail or be slow, causing dependent services to abort immediately.
+    compose_text = compose_text.replace("condition: service_healthy", "condition: service_started")
+    logger.debug("Relaxed all depends_on conditions to service_started")
+
+    compose_file.write_text(compose_text, encoding="utf-8")
+
     logger.info("Bundle run: docker compose up -d (%s)", compose_project)
     docker_client.compose_up(str(runtime_dir), compose_project, build=False)
 
-    compose_text = compose_file.read_text(encoding="utf-8", errors="replace")
-    services, service_ports = _parse_compose_services_and_ports(compose_text)
+    # 4. Query the engine for the ACTUAL ports assigned by Docker.
+    # We retry a few times because Docker can take a second to update metadata labels/ports.
+    service_ports = []
+    for i in range(10):
+        service_ports = docker_client.get_compose_port_mappings(compose_project)
+        if service_ports:
+            break
+        import time
+        time.sleep(1)
+        if i > 2:
+            logger.info("Still waiting for ports for %s (attempt %d/10)...", compose_project, i+1)
+    
+    # Inject full URLs for the proxy
+    for sp in service_ports:
+        sp["url"] = f"http://localhost:{sp['host_port']}"
+
+    services = list(set(sp["service"] for sp in service_ports))
 
     primary_url = _pick_primary_url(service_ports)
     return {

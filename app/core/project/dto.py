@@ -8,15 +8,19 @@ class ProjectResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    assignment_id: Optional[int] = None
+    student_id: Optional[int] = None
     group_id: Optional[int] = None
     group_name: Optional[str] = None
     submission_type: SubmissionTypeEnum
+    submission_uuid: Optional[str] = None
     project_source_url: Optional[str] = None
     env: str
     testcase_result: Optional[str] = None
     cybersecurity_result: Optional[str] = None
     score: Optional[int] = None
     feedback: Optional[str] = None
+    is_late: bool = False
     created_date: Optional[datetime] = None
 
     students: List[StudentResponse] = []

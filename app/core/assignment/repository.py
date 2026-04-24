@@ -46,8 +46,8 @@ def create_assignment(db:Session , assignment: Assignment):
     db.refresh(assignment)
     return assignment
 
-def get_assignments_by_classroom(db: Session, classroom_id: int) -> List[Assignment]:
-    return db.query(Assignment).options(
+def get_assignments_by_classroom(db: Session, classroom_id: int, is_public_only: bool = False) -> List[Assignment]:
+    query = db.query(Assignment).options(
             joinedload(Assignment.project_type),
             joinedload(Assignment.language),
             joinedload(Assignment.attachments),
@@ -59,9 +59,10 @@ def get_assignments_by_classroom(db: Session, classroom_id: int) -> List[Assignm
             ).filter(
             Assignment.classroom_id == classroom_id,
             Assignment.deleted_date.is_(None)
-            ).order_by(
-                desc(Assignment.created_date)
-            ).all()
+            )
+    if is_public_only:
+        query = query.filter(Assignment.is_public == True)
+    return query.order_by(desc(Assignment.created_date)).all()
 
 
 def get_assignment_by_id(db: Session, assignment_id: int) -> Assignment:

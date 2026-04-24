@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import logging
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,8 @@ from typing import Optional
 import httpx
 from fastapi import BackgroundTasks, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.core.assignment.repository import get_assignment_by_id
 from app.core.classroom.repository import is_classroom_of_teacher
@@ -100,6 +103,22 @@ def _resolve_execution_mode(assignment) -> str:
     )
 
 
+def _resolve_execution_mode_from_payload_or_assignment(payload, assignment) -> str:
+    """Prefer explicit client-provided mode; fall back to assignment.project_type."""
+    # allow either "project_type" or "deploy_mode" from client
+    requested = None
+    try:
+        requested = getattr(payload, "project_type", None) or getattr(payload, "deploy_mode", None)
+    except Exception:
+        requested = None
+
+    requested_mode = _normalize_mode_name(requested)
+    if requested_mode:
+        return requested_mode
+
+    return _resolve_execution_mode(assignment)
+
+
 def _coerce_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -108,7 +127,13 @@ def _coerce_utc(value: datetime | None) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
-def _validate_assignment_availability(assignment) -> None:
+def _validate_assignment_availability(assignment) -> bool:
+    """Validate the assignment is accessible and return True if the submission is late.
+
+    Raises HTTP 404 if the assignment is deleted.
+    Raises HTTP 403 if the assignment has not opened yet.
+    Returns True if the due_date has passed (late submission), False otherwise.
+    """
     if assignment.deleted_date is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
     now = datetime.now(timezone.utc)
@@ -117,8 +142,12 @@ def _validate_assignment_availability(assignment) -> None:
 
     if start_date and now < start_date:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Assignment has not opened yet")
+
+    # Past due_date → allow submission but flag as late
     if due_date and now > due_date:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Assignment is already closed")
+        return True
+
+    return False
 
 
 def _set_step_running(manifest: SubmissionManifest, step_name: str, **details) -> SubmissionManifest:
@@ -234,6 +263,7 @@ def _ensure_submission_runtime_ready(
 def _create_submission_records(
     db: Session,
     *,
+    assignment_id: int,
     student_id: int,
     group_id: Optional[int],
     is_group: bool,
@@ -241,6 +271,8 @@ def _create_submission_records(
     source_ref: str | None,
     env: str | None,
     execution_mode: str,
+    submission_uuid: str,
+    is_late: bool = False,
 ) -> Project:
     """Create Project and conditionally SubmissionOf.
 
@@ -257,12 +289,16 @@ def _create_submission_records(
     # It will be updated to the R2 URL after upload completes in the background pipeline.
     initial_source_url = source_ref or ""
 
+    logger.info("Creating project record for assignment %s with UUID: %s", assignment_id, submission_uuid)
     project = Project(
+        assignment_id=assignment_id,
         group_id=group_id if is_group else None,
         student_id=None if is_group else student_id,
         submission_type=submission_type,
+        submission_uuid=submission_uuid,
         project_source_url=initial_source_url,
         env=env or execution_mode,
+        is_late=is_late,
     )
     db.add(project)
     db.flush()
@@ -356,7 +392,7 @@ async def create_submission_service(
     if not assignment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
 
-    _validate_assignment_availability(assignment)
+    is_late = _validate_assignment_availability(assignment)
 
     if not is_student_in_classroom(db, assignment.classroom_id, student.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Student is not in the assignment classroom")
@@ -380,8 +416,8 @@ async def create_submission_service(
                 detail="Group assignment requires a group. Please join or create a group first.",
             )
 
-    submission_id = uuid.uuid4().hex
-    execution_mode = _resolve_execution_mode(assignment)
+    submission_id = str(uuid.uuid4())
+    execution_mode = _resolve_execution_mode_from_payload_or_assignment(payload, assignment)
     requires_testcase = execution_mode in {"frontend-only", "backend-only"} and bool(assignment.testcase_url)
     _ensure_submission_runtime_ready(
         execution_mode=execution_mode,
@@ -408,6 +444,7 @@ async def create_submission_service(
 
     project = _create_submission_records(
         db,
+        assignment_id=assignment.id,
         student_id=student.id,
         group_id=resolved_group_id,
         is_group=is_group,
@@ -415,6 +452,8 @@ async def create_submission_service(
         source_ref=source_ref,
         env=payload.env,
         execution_mode=execution_mode,
+        submission_uuid=submission_id,
+        is_late=is_late,
     )
 
     manifest = build_initial_manifest(
@@ -429,6 +468,7 @@ async def create_submission_service(
         source_ref=source_ref,
         env=payload.env,
         testcase_source_url=assignment.testcase_url,
+        is_late=is_late,
     )
 
     if upload_file:
@@ -451,6 +491,7 @@ async def create_submission_service(
         assignment_id=assignment_id,
         execution_mode=execution_mode,
         pipeline_status=manifest.pipeline_status,
+        is_late=is_late,
         status_url=f"/api/submission/{submission_id}",
         artifact_list_url=f"/api/submission/{submission_id}/artifacts",
     )
@@ -641,6 +682,7 @@ async def _run_deployment_step(manifest: SubmissionManifest) -> None:
         DeploymentStatus(
             deployment_id=deployment_id,
             project_id=project_id,
+            project_db_id=manifest.project_db_id,
             project_name=project_name,
             status="analyzing",
             current_step=1,
@@ -1013,10 +1055,49 @@ def resolve_submission_artifact_service(
     db: Session,
     current_user,
 ):
-    manifest = read_manifest(submission_id)
-    _ensure_submission_access(manifest, db, current_user)
-    artifact, artifact_path = resolve_artifact_path(manifest, artifact_id)
-    return artifact, artifact_path
+    from fastapi import HTTPException, status
+    import json
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        manifest = read_manifest(submission_id)
+        _ensure_submission_access(manifest, db, current_user)
+        artifact, artifact_path = resolve_artifact_path(manifest, artifact_id)
+        return artifact, artifact_path
+    except FileNotFoundError as exc:
+        # Fallback for Cybersecurity results if manifest is missing
+        project = db.query(Project).filter(Project.submission_uuid == submission_id).first()
+        if project and project.cybersecurity_result:
+            try:
+                cyber = project.cybersecurity_result
+                if isinstance(cyber, str):
+                    cyber = json.loads(cyber)
+                
+                if cyber.get("artifact_id") == artifact_id:
+                    # Found matching cyber artifact in DB, check for file in results_dir
+                    path = Path(settings.results_dir) / f"{submission_id}.json"
+                    if path.exists():
+                        from .manifest import ArtifactRecord
+                        return ArtifactRecord(
+                            artifact_id=artifact_id,
+                            name="scan.json",
+                            category="cyber",
+                            relative_path=f"{submission_id}.json",
+                            content_type="application/json"
+                        ), path
+            except Exception as inner_exc:
+                logger.error(f"Fallback resolution error: {inner_exc}")
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=f"Submission artifacts not found on server: {str(exc)}"
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error resolving artifact: {str(exc)}"
+        ) from exc
 
 
 async def activate_project_service(
