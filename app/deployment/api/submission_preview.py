@@ -308,19 +308,39 @@ def _launch_and_schedule(submission_id: str) -> None:
 
 
 @router.get("/{submission_id}/preview/redirect")
-async def redirect_to_preview(submission_id: str):
+async def redirect_to_preview(submission_id: str, role: Optional[str] = None, fallback: Optional[str] = None):
     """Redirect to the already-running preview URL without triggering a rebuild."""
     resolved_id = _resolve_submission_id(submission_id)
+    
+    def _is_container_running(dep) -> bool:
+        from app.deployment.services.docker.client import docker_client
+        try:
+            if dep.container_id:
+                return docker_client.get_status(dep.container_id) == "running"
+            elif dep.compose_project:
+                mappings = docker_client.get_compose_port_mappings(dep.compose_project)
+                return len(mappings) > 0
+        except Exception:
+            pass
+        return False
     
     # Check deployment_store to see if it's already deployed
     dep = deployment_store.get(resolved_id)
     if dep and dep.status in {"running", "success"} and dep.preview_url:
-        return RedirectResponse(url=dep.preview_url, status_code=302)
+        if _is_container_running(dep):
+            # Redirect to the proxy URL, not the raw host port
+            url = f"/preview/{resolved_id}/"
+            if role:
+                url += f"?role={role}"
+            return RedirectResponse(url=url, status_code=302)
     
     # Check sessions as fallback
     session = _sessions.get(resolved_id)
     if session and session.status == "running" and session.preview_url:
         return RedirectResponse(url=session.preview_url, status_code=302)
+        
+    if fallback:
+        return RedirectResponse(url=fallback, status_code=302)
         
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
