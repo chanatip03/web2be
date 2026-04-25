@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from app.deployment.core.config import settings
@@ -304,6 +305,27 @@ def _launch_and_schedule(submission_id: str) -> None:
     """Sync wrapper: launch bundle then schedule TTL cleanup."""
     _launch_bundle(submission_id)
     _schedule_cleanup(submission_id)
+
+
+@router.get("/{submission_id}/preview/redirect")
+async def redirect_to_preview(submission_id: str):
+    """Redirect to the already-running preview URL without triggering a rebuild."""
+    resolved_id = _resolve_submission_id(submission_id)
+    
+    # Check deployment_store to see if it's already deployed
+    dep = deployment_store.get(resolved_id)
+    if dep and dep.status in {"running", "success"} and dep.preview_url:
+        return RedirectResponse(url=dep.preview_url, status_code=302)
+    
+    # Check sessions as fallback
+    session = _sessions.get(resolved_id)
+    if session and session.status == "running" and session.preview_url:
+        return RedirectResponse(url=session.preview_url, status_code=302)
+        
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Project is not currently deployed or running."
+    )
 
 
 @router.get("/{submission_id}/preview/status")
