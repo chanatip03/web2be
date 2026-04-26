@@ -2,6 +2,9 @@ import os
 import subprocess
 import zipfile
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 BASE_PATH = os.getcwd()
 
@@ -43,11 +46,24 @@ def run_jplag_service(assignment_id: int = 0, language: str = "javascript", work
     ]
     
     # If the text parser is used (for HTML/frontend), we must explicitly tell JPlag to scan web extensions
-    # because the default text parser might only look for .txt files
+    # NOTE: JPlag suffixes should NOT have dots (e.g. 'html' instead of '.html')
     if jplag_lang == "text":
-        cmd.extend(["-p", ".html,.css,.js,.jsx,.ts,.tsx"])
+        cmd.extend(["-p", "html,css,js,jsx,ts,tsx"])
 
     cmd.append(work_dir)
+    msg = f"DEBUG: Running JPlag command: {' '.join(cmd)}"
+    logger.info(msg)
+    print(msg, flush=True)
+
+    # List files to see if they are actually there
+    try:
+        subdirs = [d for d in os.listdir(work_dir) if os.path.isdir(os.path.join(work_dir, d))]
+        logger.info(f"DEBUG: Found {len(subdirs)} submissions in {work_dir}")
+        for sd in subdirs:
+            files = os.listdir(os.path.join(work_dir, sd))
+            logger.info(f"DEBUG: Submission '{sd}' contains: {files}")
+    except Exception as e:
+        logger.error(f"DEBUG: Failed to list files: {e}")
 
     try:
         process = subprocess.run(
@@ -57,6 +73,11 @@ def run_jplag_service(assignment_id: int = 0, language: str = "javascript", work
             encoding='utf-8',
             cwd=result_dir
         )
+        
+        logger.info(f"DEBUG: JPlag Return Code: {process.returncode}")
+        logger.info(f"DEBUG: JPlag STDOUT: {process.stdout}")
+        logger.info(f"DEBUG: JPlag STDERR: {process.stderr}")
+        print(f"DEBUG: JPlag STDOUT: {process.stdout}", flush=True)
 
         expected_file = os.path.join(result_dir, f"{result_name}.jplag")
         

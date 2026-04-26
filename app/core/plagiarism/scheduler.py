@@ -26,6 +26,27 @@ def _extract_r2_key(url: str) -> str:
         return url[url.find("submissions/"):]
     return url
 
+def _flatten_directory(path: str):
+    """
+    If a directory contains only one subdirectory and no files,
+    move everything from that subdirectory up to the parent.
+    This helps JPlag find files when students zip their entire project folder.
+    """
+    try:
+        items = os.listdir(path)
+        if len(items) == 1:
+            subpath = os.path.join(path, items[0])
+            if os.path.isdir(subpath):
+                # Move all contents of subpath up to path
+                for sub_item in os.listdir(subpath):
+                    shutil.move(os.path.join(subpath, sub_item), os.path.join(path, sub_item))
+                # Remove the now empty subpath
+                os.rmdir(subpath)
+                # Recurse in case it's nested multiple levels
+                _flatten_directory(path)
+    except Exception:
+        pass # Safety check to prevent crashing the whole job if flattening fails
+
 async def check_assignment_plagiarism(db: Session, assignment: Assignment):
     logger.info(f"Starting plagiarism check for Assignment {assignment.id}")
     
@@ -82,6 +103,7 @@ async def check_assignment_plagiarism(db: Session, assignment: Assignment):
                 
                 # unzip_file takes bytes and an extract_to path
                 unzip_file(zip_bytes, extract_to=extract_path)
+                _flatten_directory(extract_path)
                 valid_submissions += 1
             except Exception as e:
                 logger.error(f"Failed to download/extract project {project.id} for plagiarism check: {e}")
@@ -142,7 +164,7 @@ async def plagiarism_job():
                 else:
                     due_date = due_date.astimezone(timezone.utc)
                 
-                check_time = due_date + timedelta(seconds=0)
+                check_time = due_date + timedelta(hours=3)
                 
                 if now >= check_time:
                     await check_assignment_plagiarism(db, assignment)
