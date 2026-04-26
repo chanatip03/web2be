@@ -13,6 +13,9 @@ from app.deployment import router as deployment_router
 import subprocess
 import logging
 
+import asyncio
+from app.core.plagiarism.scheduler import start_plagiarism_scheduler
+
 app = FastAPI(title="WEB2 API",redirect_slashes=False)
 logger = logging.getLogger(__name__)
 
@@ -35,6 +38,10 @@ def seed_data():
         run_seed(db)
     finally:
         db.close()
+
+@app.on_event("startup")
+async def start_background_tasks():
+    asyncio.create_task(start_plagiarism_scheduler())
 
 app.add_middleware(
     CORSMiddleware,

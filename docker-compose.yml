@@ -24,7 +24,7 @@ services:
     build: .
     container_name: web2-student-scanner
     ports:
-      - "8000:8000"
+      - "8888:8000"
     volumes:
       - ./app:/app/app
       - ./app/deployment/data:/app/app/deployment/data

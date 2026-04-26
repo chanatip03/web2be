@@ -1,39 +1,53 @@
 import os
+import subprocess
+import zipfile
+import json
 
 BASE_PATH = os.getcwd()
 
 WORK_DIR = os.path.abspath(os.path.join(BASE_PATH, "app" ,"data", "submissions"))
-
 RESULT_DIR = os.path.abspath(os.path.join(BASE_PATH, "app" ,"data", "results"))
 
-def ensure_result_dir():
-    os.makedirs(RESULT_DIR, exist_ok=True)
-
-import subprocess
-import os
-from .repository import ensure_result_dir, WORK_DIR, RESULT_DIR
-import zipfile
-import json
-
-JAVA = r"C:\Program Files\Java\jdk-25\bin\java.exe"
+JAVA = "java"
 JPLAG_JAR = os.path.abspath(r"app/core/plagiarism/jplag/jplag.jar")
 
-def run_jplag_service():
-    ensure_result_dir()
-    result_name = "report"
+def run_jplag_service(assignment_id: int = 0, language: str = "javascript", work_dir: str = WORK_DIR, result_dir: str = RESULT_DIR):
+    os.makedirs(result_dir, exist_ok=True)
+    result_name = f"report_{assignment_id}" if assignment_id else "report"
+
+    # Map generic language names to jplag supported values
+    lang_map = {
+        "python": "python3",
+        "js": "javascript",
+        "ts": "typescript",
+        "java": "java",
+        "c": "c",
+        "cpp": "cpp",
+        "c++": "cpp",
+        "go": "go", # Depending on jplag version, go might be supported
+        "frontend": "text",
+        "html": "text",
+    }
+    jplag_lang = lang_map.get(language.lower(), language.lower())
 
     cmd = [
         JAVA,
         "--enable-native-access=ALL-UNNAMED",
         "-jar", JPLAG_JAR,
         "--mode", "RUN", 
-        "-l", "javascript",
+        "-l", jplag_lang,
         "-r", result_name,
         "--overwrite",
         "-m", "0.0",          #ตรวจสอบทุกระดับความเหมือนแม้จะ 0%
         "-t", "1",            #บังคับตรวจแม้โค้ดจะสั้นมาก (1 token)
-        WORK_DIR
     ]
+    
+    # If the text parser is used (for HTML/frontend), we must explicitly tell JPlag to scan web extensions
+    # because the default text parser might only look for .txt files
+    if jplag_lang == "text":
+        cmd.extend(["-p", ".html,.css,.js,.jsx,.ts,.tsx"])
+
+    cmd.append(work_dir)
 
     try:
         process = subprocess.run(
@@ -41,10 +55,10 @@ def run_jplag_service():
             capture_output=True,
             text=True,
             encoding='utf-8',
-            cwd=RESULT_DIR
+            cwd=result_dir
         )
 
-        expected_file = os.path.join(RESULT_DIR, f"{result_name}.jplag")
+        expected_file = os.path.join(result_dir, f"{result_name}.jplag")
         
         if process.returncode != 0:
             full_error = f"STDOUT: {process.stdout}\nSTDERR: {process.stderr}"
