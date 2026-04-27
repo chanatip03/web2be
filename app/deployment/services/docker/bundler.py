@@ -148,35 +148,17 @@ async def create_bundle(
 
 def _save_images_to_tar(image_tags: List[str], output_path: Path) -> None:
     """Save multiple Docker images into a single tar file."""
-    import docker
-    client = docker.from_env()
-
-    images = []
-    for tag in image_tags:
-        try:
-            images.append(client.images.get(tag))
-        except docker.errors.ImageNotFound:
-            logger.warning("Image not found, skipping: %s", tag)
-
-    if not images:
+    import subprocess
+    from app.deployment.core.exceptions import DockerError
+    
+    if not image_tags:
         raise ValueError("No images found to save")
-
-    # Docker SDK: save multiple images at once
-    chunks = client.images.get(image_tags[0]).save(named=True)
-    if len(image_tags) > 1:
-        # For multiple images, save them individually and combine into one tar
-        with open(str(output_path), "wb") as f:
-            for tag in image_tags:
-                try:
-                    img = client.images.get(tag)
-                    for chunk in img.save(named=True):
-                        f.write(chunk)
-                except Exception as exc:
-                    logger.warning("Failed to save image %s: %s", tag, exc)
-    else:
-        with open(str(output_path), "wb") as f:
-            for chunk in chunks:
-                f.write(chunk)
+        
+    cmd = ["docker", "save", "-o", str(output_path)] + image_tags
+    logger.info("Running docker save for %d images: %s", len(image_tags), image_tags)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise DockerError(f"Failed to save images {image_tags}:\n{result.stderr}")
 
 
 def _get_compose_content(deployment: DeploymentStatus, project_path: Path) -> str:
