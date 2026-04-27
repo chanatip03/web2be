@@ -1,7 +1,7 @@
 from fastapi import Form
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from datetime import datetime, timezone, timedelta
-from typing import Optional, List
+from typing import Any, Optional, List
 
 # UTC+7 fixed offset — works on Windows without the tzdata package
 THAI_TZ = timezone(timedelta(hours=7))
@@ -144,6 +144,7 @@ class AssignmentResponse(BaseModel):
     projectType: ProjectType = Field(..., alias="project_type")
     language: Optional[Language] = None
     testcaseUrl: Optional[str] = Field(None, alias="testcase_url")
+    plagiarism_result: Optional[Any] = None
     attachments: List[Attachment] = []
 
 

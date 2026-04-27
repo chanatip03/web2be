@@ -17,7 +17,6 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     gnupg \
     git \
-    default-jre \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
     && chmod a+r /etc/apt/keyrings/docker.gpg \
@@ -30,7 +29,7 @@ RUN apt-get update && apt-get install -y \
 
 # Install Java 26 (Required for JPlag class version 69.0)
 RUN wget https://download.java.net/java/GA/jdk26.0.1/458fda22e4c54d5ba572ab8d2b22eb83/8/GPL/openjdk-26.0.1_linux-x64_bin.tar.gz \
-    && tar -xvf openjdk-26.0.1_linux-x64_bin.tar.gz \
+    && tar -xzf openjdk-26.0.1_linux-x64_bin.tar.gz \
     && mv jdk-26.0.1 /opt/jdk26 \
     && rm openjdk-26.0.1_linux-x64_bin.tar.gz
 ENV PATH="/opt/jdk26/bin:${PATH}"
