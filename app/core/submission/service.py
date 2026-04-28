@@ -274,35 +274,53 @@ def _create_submission_records(
     submission_uuid: str,
     is_late: bool = False,
 ) -> Project:
-    """Create Project and conditionally SubmissionOf.
+    """Create or Update Project.
 
-    - Group assignment:    Project.group_id = group_id (links the whole group)
-                           No SubmissionOf row — the group already tracks members.
-    - Individual:          Project.group_id = None
-                           SubmissionOf row links the submitting student to the project.
+    - Group assignment:    Updates/Creates based on group_id and assignment_id
+    - Individual:          Updates/Creates based on student_id and assignment_id
     """
     submission_type = (
         SubmissionTypeEnum.file if source_type == "zip" else SubmissionTypeEnum.github
     )
 
-    # project_source_url starts as the original source ref (repo URL or zip filename).
-    # It will be updated to the R2 URL after upload completes in the background pipeline.
     initial_source_url = source_ref or ""
 
-    logger.info("Creating project record for assignment %s with UUID: %s", assignment_id, submission_uuid)
-    project = Project(
-        assignment_id=assignment_id,
-        group_id=group_id if is_group else None,
-        student_id=None if is_group else student_id,
-        submission_type=submission_type,
-        submission_uuid=submission_uuid,
-        project_source_url=initial_source_url,
-        env=env or execution_mode,
-        is_late=is_late,
-    )
-    db.add(project)
-    db.flush()
+    project = None
+    if is_group and group_id:
+        project = db.query(Project).filter(Project.assignment_id == assignment_id, Project.group_id == group_id).first()
+    elif not is_group and student_id:
+        project = db.query(Project).filter(Project.assignment_id == assignment_id, Project.student_id == student_id).first()
 
+    if project:
+        logger.info("Updating existing project record for assignment %s with UUID: %s", assignment_id, submission_uuid)
+        project.submission_type = submission_type
+        project.submission_uuid = submission_uuid
+        project.project_source_url = initial_source_url
+        project.env = env or execution_mode
+        project.is_late = is_late
+        
+        # Clear previous pipeline results as a new one is starting
+        project.cybersecurity_result = None
+        project.testcase_result = None
+        project.container_id = None
+        project.container_resource = None
+        project.score = None
+        project.feedback = None
+    else:
+        logger.info("Creating project record for assignment %s with UUID: %s", assignment_id, submission_uuid)
+        project = Project(
+            assignment_id=assignment_id,
+            group_id=group_id if is_group else None,
+            student_id=None if is_group else student_id,
+            submission_type=submission_type,
+            submission_uuid=submission_uuid,
+            project_source_url=initial_source_url,
+            env=env or execution_mode,
+            is_late=is_late,
+        )
+        db.add(project)
+
+    db.flush()
     db.commit()
     db.refresh(project)
     return project
@@ -575,11 +593,40 @@ async def run_submission_pipeline(submission_id: str) -> None:
         manifest.deployment.setdefault("message", "Submission pipeline stopped unexpectedly.")
         manifest.deployment["unexpected_error"] = str(exc)
         write_manifest(manifest)
+        
+        try:
+            from app.deployment.api.submission_preview import _schedule_cleanup
+            _schedule_cleanup(submission_id)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to schedule container cleanup: {e}")
+            
+        try:
+            from app.utils.archive import delete_directory
+            delete_directory()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to delete directory: {e}")
+            
         return
 
     manifest = read_manifest(submission_id)
     _update_pipeline_status(manifest)
     write_manifest(manifest)
+
+    try:
+        from app.deployment.api.submission_preview import _schedule_cleanup
+        _schedule_cleanup(submission_id)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Failed to schedule container cleanup: {e}")
+
+    try:
+        from app.utils.archive import delete_directory
+        delete_directory()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Failed to delete directory: {e}")
 
 
 async def _run_cyber_scan_step(manifest: SubmissionManifest) -> None:

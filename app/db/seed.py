@@ -57,3 +57,31 @@ def run_seed(db: Session):
     seed_roles(db)
     seed_project_types(db)
     seed_languages(db)
+
+if __name__ == "__main__":
+    import subprocess
+    from app.db.database import SessionLocal, engine, Base
+    
+    print("Running database initialization and seeding...")
+    try:
+        print("Running Alembic upgrade...")
+        subprocess.run(
+            ["alembic", "upgrade", "head"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print("Alembic upgrade completed.")
+    except Exception as exc:
+        print(f"Alembic upgrade failed or not configured, falling back to create_all: {exc}")
+
+    print("Creating database schema...")
+    Base.metadata.create_all(bind=engine)
+
+    db = SessionLocal()
+    try:
+        print("Seeding database...")
+        run_seed(db)
+        print("Seeding completed successfully.")
+    finally:
+        db.close()
