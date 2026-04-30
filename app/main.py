@@ -19,25 +19,6 @@ from app.core.plagiarism.scheduler import start_plagiarism_scheduler
 app = FastAPI(title="WEB2 API",redirect_slashes=False)
 logger = logging.getLogger(__name__)
 
-@app.on_event("startup")
-def seed_data():
-    try:
-        subprocess.run(
-            ["alembic", "upgrade", "head"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except Exception as exc:
-        logger.warning("Alembic upgrade failed; falling back to create_all: %s", exc)
-
-    Base.metadata.create_all(bind=engine)
-
-    db = SessionLocal()
-    try:
-        run_seed(db)
-    finally:
-        db.close()
 
 @app.on_event("startup")
 async def start_background_tasks():

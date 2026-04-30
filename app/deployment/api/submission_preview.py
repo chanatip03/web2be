@@ -37,8 +37,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/project", tags=["Submission Preview"])
 
-# ── 2-hour TTL ───────────────────────────────────────────────────────────────
-_TTL_SECONDS = 2 * 60 * 60   # 2 hours
+# ── 5-minute TTL ─────────────────────────────────────────────────────────────
+_TTL_SECONDS = 2 * 60 * 60   # 5 minutes
 
 # ── In-memory session store ───────────────────────────────────────────────────
 # Keyed by submission_id.  Persisted only for the process lifetime so a server

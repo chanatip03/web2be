@@ -57,3 +57,16 @@ def run_seed(db: Session):
     seed_roles(db)
     seed_project_types(db)
     seed_languages(db)
+
+
+if __name__ == "__main__":
+    from app.db.database import SessionLocal
+
+    print("🌱 Running seed...")
+
+    db = SessionLocal()
+    try:
+        run_seed(db)
+        print("✅ Seed completed")
+    finally:
+        db.close()
