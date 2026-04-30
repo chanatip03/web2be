@@ -65,9 +65,18 @@ def unzip_file_from_path(zip_file_path: str, extract_to: str | None = None) -> s
 
 def delete_directory() -> bool:
     try:
-        if os.path.isdir("app/data/"):
-            shutil.rmtree("app/data/")
-            return True
-        return False
+        paths = ["data/projects", "data/submissions","data/security_scan_results"]
+
+        for path in paths:
+            if os.path.isdir(path):
+                for filename in os.listdir(path):
+                    file_path = os.path.join(path, filename)
+
+                    if os.path.isfile(file_path) or os.path.islink(file_path):
+                        os.unlink(file_path)  # ลบไฟล์
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)  # ลบโฟลเดอร์ย่อย
+
+        return True
     except Exception as e:
-        raise RuntimeError(f"Failed to delete directory app/data/: {e}")
+        raise RuntimeError(f"Failed to clear directories: {e}")

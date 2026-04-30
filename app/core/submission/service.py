@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import logging
 import shutil
 import subprocess
 import sys
@@ -11,9 +12,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from app.utils.archive import delete_directory
 import httpx
 from fastapi import BackgroundTasks, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.core.assignment.repository import get_assignment_by_id
 from app.core.classroom.repository import is_classroom_of_teacher
@@ -98,6 +102,22 @@ def _resolve_execution_mode(assignment) -> str:
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=f"Unsupported project type for submission flow: {project_type or assignment.project_type_id}",
     )
+
+
+def _resolve_execution_mode_from_payload_or_assignment(payload, assignment) -> str:
+    """Prefer explicit client-provided mode; fall back to assignment.project_type."""
+    # allow either "project_type" or "deploy_mode" from client
+    requested = None
+    try:
+        requested = getattr(payload, "project_type", None) or getattr(payload, "deploy_mode", None)
+    except Exception:
+        requested = None
+
+    requested_mode = _normalize_mode_name(requested)
+    if requested_mode:
+        return requested_mode
+
+    return _resolve_execution_mode(assignment)
 
 
 def _coerce_utc(value: datetime | None) -> datetime | None:
@@ -244,6 +264,7 @@ def _ensure_submission_runtime_ready(
 def _create_submission_records(
     db: Session,
     *,
+    assignment_id: int,
     student_id: int,
     group_id: Optional[int],
     is_group: bool,
@@ -251,34 +272,56 @@ def _create_submission_records(
     source_ref: str | None,
     env: str | None,
     execution_mode: str,
+    submission_uuid: str,
     is_late: bool = False,
 ) -> Project:
-    """Create Project and conditionally SubmissionOf.
+    """Create or Update Project.
 
-    - Group assignment:    Project.group_id = group_id (links the whole group)
-                           No SubmissionOf row — the group already tracks members.
-    - Individual:          Project.group_id = None
-                           SubmissionOf row links the submitting student to the project.
+    - Group assignment:    Updates/Creates based on group_id and assignment_id
+    - Individual:          Updates/Creates based on student_id and assignment_id
     """
     submission_type = (
         SubmissionTypeEnum.file if source_type == "zip" else SubmissionTypeEnum.github
     )
 
-    # project_source_url starts as the original source ref (repo URL or zip filename).
-    # It will be updated to the R2 URL after upload completes in the background pipeline.
     initial_source_url = source_ref or ""
 
-    project = Project(
-        group_id=group_id if is_group else None,
-        student_id=None if is_group else student_id,
-        submission_type=submission_type,
-        project_source_url=initial_source_url,
-        env=env or execution_mode,
-        is_late=is_late,
-    )
-    db.add(project)
-    db.flush()
+    project = None
+    if is_group and group_id:
+        project = db.query(Project).filter(Project.assignment_id == assignment_id, Project.group_id == group_id).first()
+    elif not is_group and student_id:
+        project = db.query(Project).filter(Project.assignment_id == assignment_id, Project.student_id == student_id).first()
 
+    if project:
+        logger.info("Updating existing project record for assignment %s with UUID: %s", assignment_id, submission_uuid)
+        project.submission_type = submission_type
+        project.submission_uuid = submission_uuid
+        project.project_source_url = initial_source_url
+        project.env = env or execution_mode
+        project.is_late = is_late
+        
+        # Clear previous pipeline results as a new one is starting
+        project.cybersecurity_result = None
+        project.testcase_result = None
+        project.container_id = None
+        project.container_resource = None
+        project.score = None
+        project.feedback = None
+    else:
+        logger.info("Creating project record for assignment %s with UUID: %s", assignment_id, submission_uuid)
+        project = Project(
+            assignment_id=assignment_id,
+            group_id=group_id if is_group else None,
+            student_id=None if is_group else student_id,
+            submission_type=submission_type,
+            submission_uuid=submission_uuid,
+            project_source_url=initial_source_url,
+            env=env or execution_mode,
+            is_late=is_late,
+        )
+        db.add(project)
+
+    db.flush()
     db.commit()
     db.refresh(project)
     return project
@@ -392,8 +435,8 @@ async def create_submission_service(
                 detail="Group assignment requires a group. Please join or create a group first.",
             )
 
-    submission_id = uuid.uuid4().hex
-    execution_mode = _resolve_execution_mode(assignment)
+    submission_id = str(uuid.uuid4())
+    execution_mode = _resolve_execution_mode_from_payload_or_assignment(payload, assignment)
     requires_testcase = execution_mode in {"frontend-only", "backend-only"} and bool(assignment.testcase_url)
     _ensure_submission_runtime_ready(
         execution_mode=execution_mode,
@@ -420,6 +463,7 @@ async def create_submission_service(
 
     project = _create_submission_records(
         db,
+        assignment_id=assignment.id,
         student_id=student.id,
         group_id=resolved_group_id,
         is_group=is_group,
@@ -427,6 +471,7 @@ async def create_submission_service(
         source_ref=source_ref,
         env=payload.env,
         execution_mode=execution_mode,
+        submission_uuid=submission_id,
         is_late=is_late,
     )
 
@@ -528,6 +573,112 @@ def _clone_repo_to_source(repo_url: str, source_dir: Path) -> None:
     shutil.rmtree(source_dir / ".git", ignore_errors=True)
 
 
+def _teardown_deployment_containers(submission_id: str) -> None:
+    """Stop & remove the Docker containers that were spun up during the submission pipeline.
+
+    This is a fully synchronous helper that can be called safely from a sync
+    background thread (i.e. from ``run_submission_pipeline_sync``) without
+    needing a running asyncio event loop.
+
+    Strategy:
+    1. Try ``docker compose down`` using the compose_project stored in the
+       deployment_store (set by ``run_deployment``).
+    2. Fall back to ``docker rm -f <container_id>`` using the container_id
+       persisted on the Project DB record.
+    """
+    import subprocess as _sp
+
+    # ── 1. compose down via deployment_store ────────────────────────
+    try:
+        from app.deployment.services.deployer.pipeline import deployment_store
+        dep = deployment_store.get(submission_id)
+        if dep and dep.compose_project:
+            compose_project = dep.compose_project
+            # Find any runtime dir that was used during deployment
+            runtime_candidates = [
+                Path(settings.data_dir) / "previews" / submission_id,
+                Path(settings.deployments_dir) / "activations" / submission_id,
+                Path(settings.projects_dir) / submission_id,
+            ]
+            runtime_dir = next((p for p in runtime_candidates if p.exists()), None)
+            if runtime_dir:
+                try:
+                    docker_client.compose_down(str(runtime_dir), compose_project, remove_volumes=True)
+                    logger.info("compose_down succeeded for submission %s (project=%s)", submission_id, compose_project)
+                    return
+                except Exception as exc:
+                    logger.warning("compose_down failed for %s: %s — will try per-container removal", submission_id, exc)
+            # compose down without a compose file: docker compose -p <project> down
+            try:
+                result = _sp.run(
+                    ["docker", "compose", "-p", compose_project, "down", "-v", "--remove-orphans"],
+                    capture_output=True, text=True, timeout=60,
+                )
+                if result.returncode == 0:
+                    logger.info("docker compose -p %s down succeeded for submission %s", compose_project, submission_id)
+                    return
+                logger.warning("docker compose -p %s down failed: %s", compose_project, result.stderr)
+            except Exception as exc:
+                logger.warning("docker compose -p down raised: %s", exc)
+    except Exception as exc:
+        logger.warning("Could not read deployment_store for %s: %s", submission_id, exc)
+
+    # ── 2. Fallback: remove individual container by stored container_id ──
+    try:
+        from app.db.database import SessionLocal as _SL
+        from app.models.schema import Project as _Project
+        with _SL() as _db:
+            proj = _db.query(_Project).filter(_Project.submission_uuid == submission_id).first()
+            container_id = proj.container_id if proj else None
+        if container_id:
+            result = _sp.run(
+                ["docker", "rm", "-f", container_id],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                logger.info("docker rm -f %s succeeded for submission %s", container_id, submission_id)
+            else:
+                logger.warning("docker rm -f %s failed: %s", container_id, result.stderr)
+    except Exception as exc:
+        logger.warning("Fallback container removal failed for %s: %s", submission_id, exc)
+
+    # ── 3. Clean up on-disk working directories ──────────────────────────
+    # These directories are only needed during the pipeline run. Once the
+    # pipeline has finished (and artifacts have been uploaded to R2), they
+    # can be safely removed to free disk space.
+
+    # 3a. data/submissions/<uuid>  (source code, artifacts, manifest)
+    try:
+        from .fs import get_submission_root
+        sub_root = get_submission_root(submission_id)
+        if sub_root.exists():
+            shutil.rmtree(sub_root, ignore_errors=True)
+            logger.info("Deleted submission working dir: %s", sub_root)
+    except Exception as exc:
+        logger.warning("Failed to delete submission dir for %s: %s", submission_id, exc)
+
+    # 3b. data/projects/<uuid>  (materialised source copy used by docker deployer)
+    try:
+        projects_dir = Path(settings.projects_dir) / submission_id
+        if projects_dir.exists():
+            shutil.rmtree(projects_dir, ignore_errors=True)
+            logger.info("Deleted projects dir: %s", projects_dir)
+    except Exception as exc:
+        logger.warning("Failed to delete projects dir for %s: %s", submission_id, exc)
+
+    # 3c. data/security_scan_results/<uuid>.json  (duplicate written by save_result())
+    try:
+        import os as _os
+        results_dir_env = _os.environ.get("RESULTS_DIR", "")
+        if results_dir_env:
+            scan_result = Path(results_dir_env) / f"{submission_id}.json"
+            if scan_result.exists():
+                scan_result.unlink(missing_ok=True)
+                logger.info("Deleted security scan result: %s", scan_result)
+    except Exception as exc:
+        logger.warning("Failed to delete security scan result for %s: %s", submission_id, exc)
+
+
 def run_submission_pipeline_sync(submission_id: str) -> None:
     asyncio.run(run_submission_pipeline(submission_id))
 
@@ -549,11 +700,16 @@ async def run_submission_pipeline(submission_id: str) -> None:
         manifest.deployment.setdefault("message", "Submission pipeline stopped unexpectedly.")
         manifest.deployment["unexpected_error"] = str(exc)
         write_manifest(manifest)
-        return
-
-    manifest = read_manifest(submission_id)
-    _update_pipeline_status(manifest)
-    write_manifest(manifest)
+    else:
+        # All steps completed without raising — compute final pipeline_status
+        manifest = read_manifest(submission_id)
+        _update_pipeline_status(manifest)
+        write_manifest(manifest)
+    finally:
+        # Always tear down containers after the pipeline finishes (success or error).
+        # This runs inside asyncio.run() so we are in a sync context — safe to call.
+        delete_directory()
+        _teardown_deployment_containers(submission_id)
 
 
 async def _run_cyber_scan_step(manifest: SubmissionManifest) -> None:
@@ -656,6 +812,7 @@ async def _run_deployment_step(manifest: SubmissionManifest) -> None:
         DeploymentStatus(
             deployment_id=deployment_id,
             project_id=project_id,
+            project_db_id=manifest.project_db_id,
             project_name=project_name,
             status="analyzing",
             current_step=1,
@@ -747,7 +904,7 @@ async def _run_deployment_step(manifest: SubmissionManifest) -> None:
         try:
             import subprocess
             res = subprocess.run(
-                ["docker", "ps", "-q", "--filter", f"label=com.docker.compose.project={deployment.compose_project}"],
+                ["docker", "ps", "--format", "{{.Names}}", "--filter", f"label=com.docker.compose.project={deployment.compose_project}"],
                 capture_output=True, text=True
             )
             c_ids = [cid.strip() for cid in res.stdout.strip().split('\n') if cid.strip()]
@@ -762,7 +919,7 @@ async def _run_deployment_step(manifest: SubmissionManifest) -> None:
         try:
             import subprocess
             res = subprocess.run(
-                ["docker", "ps", "-q", "--latest"],
+                ["docker", "ps", "--format", "{{.Names}}", "--latest"],
                 capture_output=True, text=True
             )
             c_ids = [cid.strip() for cid in res.stdout.strip().split('\n') if cid.strip()]
@@ -1028,10 +1185,49 @@ def resolve_submission_artifact_service(
     db: Session,
     current_user,
 ):
-    manifest = read_manifest(submission_id)
-    _ensure_submission_access(manifest, db, current_user)
-    artifact, artifact_path = resolve_artifact_path(manifest, artifact_id)
-    return artifact, artifact_path
+    from fastapi import HTTPException, status
+    import json
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        manifest = read_manifest(submission_id)
+        _ensure_submission_access(manifest, db, current_user)
+        artifact, artifact_path = resolve_artifact_path(manifest, artifact_id)
+        return artifact, artifact_path
+    except FileNotFoundError as exc:
+        # Fallback for Cybersecurity results if manifest is missing
+        project = db.query(Project).filter(Project.submission_uuid == submission_id).first()
+        if project and project.cybersecurity_result:
+            try:
+                cyber = project.cybersecurity_result
+                if isinstance(cyber, str):
+                    cyber = json.loads(cyber)
+                
+                if cyber.get("artifact_id") == artifact_id:
+                    # Found matching cyber artifact in DB, check for file in results_dir
+                    path = Path(settings.results_dir) / f"{submission_id}.json"
+                    if path.exists():
+                        from .manifest import ArtifactRecord
+                        return ArtifactRecord(
+                            artifact_id=artifact_id,
+                            name="scan.json",
+                            category="cyber",
+                            relative_path=f"{submission_id}.json",
+                            content_type="application/json"
+                        ), path
+            except Exception as inner_exc:
+                logger.error(f"Fallback resolution error: {inner_exc}")
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=f"Submission artifacts not found on server: {str(exc)}"
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error resolving artifact: {str(exc)}"
+        ) from exc
 
 
 async def activate_project_service(
@@ -1075,9 +1271,18 @@ async def activate_project_service(
             "error": existing.error,
         }
         
+    original_compose_project = f"activate-{submission_id}"
+    if project.container_resource:
+        import re
+        from app.utils.r2 import R2_PUBLIC_URL
+        key = project.container_resource.replace(R2_PUBLIC_URL.rstrip('/') + "/", "")
+        m = re.search(r"submissions/([^/]+)/", key)
+        if m:
+            original_compose_project = m.group(1)
+
     session = PreviewSession(
         submission_id=submission_id,
-        compose_project=f"activate-{submission_id}",
+        compose_project=original_compose_project,
         runtime_dir=str(Path(settings.deployments_dir) / "activations" / submission_id),
     )
     _sessions[submission_id] = session

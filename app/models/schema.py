@@ -167,6 +167,7 @@ class Assignment(Base):
     project_type = relationship("ProjectType", back_populates="assignments")
     language = relationship("Language", back_populates="assignments")
     groups = relationship("Group", back_populates="assignment", cascade="all, delete-orphan")
+    projects = relationship("Project", back_populates="assignment", cascade="all, delete-orphan")
 
 class Attachment(Base):
     __tablename__ = "attachments"
@@ -203,10 +204,12 @@ class Project(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
+    assignment_id = Column(Integer, ForeignKey("assignments.id", ondelete="CASCADE"), nullable=True)
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=True)
     student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=True)
 
     submission_type = Column(Enum(SubmissionTypeEnum, name="submission_type_enum"), nullable=False)
+    submission_uuid = Column(String, nullable=True)
     project_source_url = Column(String, nullable=True)
     env = Column(String, nullable=False)
     container_id = Column(String, nullable=True)
@@ -224,11 +227,19 @@ class Project(Base):
     
     group = relationship("Group", back_populates="projects")
     student = relationship("Student", back_populates="projects")
+    assignment = relationship("Assignment", back_populates="projects")
+
+    @property
+    def group_name(self):
+        return self.group.name if self.group else None
 
     @property
     def students(self):
         if self.group_id and self.group:
             return [member.student for member in self.group.members if member.student]
+        # Individual submission — return the directly linked student
+        if self.student:
+            return [self.student]
         return []
 
 class Group(Base):

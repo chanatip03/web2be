@@ -13,18 +13,27 @@ WORKDIR /app
 # =========================
 RUN apt-get update && apt-get install -y \
     curl \
+    wget \
     ca-certificates \
     gnupg \
     git \
+    default-jre \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
     && chmod a+r /etc/apt/keyrings/docker.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
-       | tee /etc/apt/sources.list.d/docker.list > /dev/null \
+    | tee /etc/apt/sources.list.d/docker.list > /dev/null \
     && apt-get update && apt-get install -y \
-       docker-ce-cli \
-       docker-compose-plugin \
+    docker-ce-cli \
+    docker-compose-plugin \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Java 26 (Required for JPlag class version 69.0)
+RUN wget https://download.java.net/java/GA/jdk26.0.1/458fda22e4c54d5ba572ab8d2b22eb83/8/GPL/openjdk-26.0.1_linux-x64_bin.tar.gz \
+    && tar -xvf openjdk-26.0.1_linux-x64_bin.tar.gz \
+    && mv jdk-26.0.1 /opt/jdk26 \
+    && rm openjdk-26.0.1_linux-x64_bin.tar.gz
+ENV PATH="/opt/jdk26/bin:${PATH}"
 
 # =========================
 # Install Snyk CLI

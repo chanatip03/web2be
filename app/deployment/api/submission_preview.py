@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from app.deployment.core.config import settings
@@ -29,13 +30,15 @@ from app.deployment.services.docker.client import docker_client
 from app.deployment.services.deployer.pipeline import deployment_store
 from app.deployment.models.deployment import DeploymentStatus, ServicePortMapping
 from app.utils.r2 import get_file_bytes, R2_PUBLIC_URL
+from app.db.database import SessionLocal
+from app.models.schema import Project as DBProject
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/project", tags=["Submission Preview"])
 
-# ── 2-hour TTL ───────────────────────────────────────────────────────────────
-_TTL_SECONDS = 2 * 60 * 60   # 2 hours
+# ── 5-minute TTL ─────────────────────────────────────────────────────────────
+_TTL_SECONDS = 2 * 60 * 60   # 5 minutes
 
 # ── In-memory session store ───────────────────────────────────────────────────
 # Keyed by submission_id.  Persisted only for the process lifetime so a server
@@ -48,6 +51,7 @@ _cleanup_tasks: Dict[str, asyncio.Task] = {}
 
 class PreviewSession(BaseModel):
     submission_id: str
+    display_id: str = ""           # Original ID used for display (e.g. numeric project ID)
     status: str = "starting"       # starting | running | error | stopped
     preview_url: Optional[str] = None
     error: Optional[str] = None
@@ -63,6 +67,38 @@ class PreviewSession(BaseModel):
     def seconds_remaining(self) -> int:
         delta = self.expires_at - datetime.now(timezone.utc)
         return max(0, int(delta.total_seconds()))
+
+
+def _resolve_submission_id(id_or_uuid: str) -> str:
+    """Resolve a project ID (numeric) or submission UUID to a submission UUID."""
+    if id_or_uuid.isdigit():
+        # 1. Try Database lookup
+        try:
+            with SessionLocal() as db:
+                proj = db.query(DBProject).filter(DBProject.id == int(id_or_uuid)).first()
+                if proj and proj.submission_uuid:
+                    return proj.submission_uuid
+        except Exception as e:
+            logger.warning("Failed to resolve project ID %s from DB: %s", id_or_uuid, e)
+
+        # 2. Fallback: Search manifests on disk (useful for older records or DB sync issues)
+        try:
+            import json
+            submissions_dir = Path(settings.submissions_dir)
+            if submissions_dir.exists():
+                for manifest_path in submissions_dir.glob("*/manifest.json"):
+                    try:
+                        with open(manifest_path, "r") as f:
+                            data = json.load(f)
+                            if str(data.get("project_db_id")) == id_or_uuid:
+                                logger.info("Resolved project ID %s to UUID %s from disk manifest", id_or_uuid, manifest_path.parent.name)
+                                return manifest_path.parent.name
+                    except Exception:
+                        continue
+        except Exception as e:
+            logger.warning("Failed to resolve project ID %s from disk manifests: %s", id_or_uuid, e)
+
+    return id_or_uuid
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -169,7 +205,9 @@ def _launch_bundle(submission_id: str) -> PreviewSession:
 
         # 3. Update session
         session.status = "running"
-        session.preview_url = f"/preview/{submission_id}/"
+        # Use display_id if available for a cleaner URL, fallback to UUID
+        display_id = session.display_id or submission_id
+        session.preview_url = f"/preview/{display_id}/"
         session.compose_project = compose_project
         session.runtime_dir = str(runtime)
         session.service_ports = result.get("service_ports", [])
@@ -197,8 +235,9 @@ def _launch_bundle(submission_id: str) -> PreviewSession:
     dep.preview_url = session.preview_url
     dep.compose_project = session.compose_project
     if session.status == "running":
-        dep.service_ports = [ServicePortMapping(**sp) for sp in session.service_ports] if session.service_ports else None
-        dep.compose_services = [sp.get("service") for sp in session.service_ports if sp.get("service")] if session.service_ports else None
+        valid_ports = [sp for sp in (session.service_ports or []) if isinstance(sp, dict)]
+        dep.service_ports = [ServicePortMapping(**sp) for sp in valid_ports] if valid_ports else None
+        dep.compose_services = [sp.get("service") for sp in valid_ports if sp.get("service")] if valid_ports else None
         # Default to fullstack to ensure frontend/backend proxying handles edge cases
         if not dep.deploy_mode or dep.deploy_mode == "auto":
             dep.deploy_mode = "fullstack"
@@ -218,6 +257,8 @@ async def start_preview(submission_id: str, background_tasks: BackgroundTasks):
     - If stopped or error: re-launches.
     - Container auto-stops after 2 hours.
     """
+    original_id = submission_id
+    submission_id = _resolve_submission_id(submission_id)
     existing = _sessions.get(submission_id)
 
     # Already running — return fast
@@ -242,6 +283,7 @@ async def start_preview(submission_id: str, background_tasks: BackgroundTasks):
     # Create / reset session
     session = PreviewSession(
         submission_id=submission_id,
+        display_id=original_id,
         compose_project=_compose_project(submission_id),
         runtime_dir=str(_runtime_dir(submission_id)),
     )
@@ -265,9 +307,51 @@ def _launch_and_schedule(submission_id: str) -> None:
     _schedule_cleanup(submission_id)
 
 
+@router.get("/{submission_id}/preview/redirect")
+async def redirect_to_preview(submission_id: str, role: Optional[str] = None, fallback: Optional[str] = None):
+    """Redirect to the already-running preview URL without triggering a rebuild."""
+    resolved_id = _resolve_submission_id(submission_id)
+    
+    def _is_container_running(dep) -> bool:
+        from app.deployment.services.docker.client import docker_client
+        try:
+            if dep.container_id:
+                return docker_client.get_status(dep.container_id) == "running"
+            elif dep.compose_project:
+                mappings = docker_client.get_compose_port_mappings(dep.compose_project)
+                return len(mappings) > 0
+        except Exception:
+            pass
+        return False
+    
+    # Check deployment_store to see if it's already deployed
+    dep = deployment_store.get(resolved_id)
+    if dep and dep.status in {"running", "success"} and dep.preview_url:
+        if _is_container_running(dep):
+            # Redirect to the proxy URL, not the raw host port
+            url = f"/preview/{resolved_id}/"
+            if role:
+                url += f"?role={role}"
+            return RedirectResponse(url=url, status_code=302)
+    
+    # Check sessions as fallback
+    session = _sessions.get(resolved_id)
+    if session and session.status == "running" and session.preview_url:
+        return RedirectResponse(url=session.preview_url, status_code=302)
+        
+    if fallback:
+        return RedirectResponse(url=fallback, status_code=302)
+        
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Project is not currently deployed or running."
+    )
+
+
 @router.get("/{submission_id}/preview/status")
 async def get_preview_status(submission_id: str):
     """Poll container status.  Returns preview_url once running."""
+    submission_id = _resolve_submission_id(submission_id)
     session = _sessions.get(submission_id)
     if not session:
         raise HTTPException(
@@ -288,6 +372,7 @@ async def get_preview_status(submission_id: str):
 @router.delete("/{submission_id}/preview/stop", status_code=200)
 async def stop_preview(submission_id: str):
     """Manually stop and remove the container before the 2-hour TTL."""
+    submission_id = _resolve_submission_id(submission_id)
     if submission_id not in _sessions:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
