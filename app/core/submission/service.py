@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from app.utils.archive import delete_directory
 import httpx
 from fastapi import BackgroundTasks, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
@@ -572,6 +573,112 @@ def _clone_repo_to_source(repo_url: str, source_dir: Path) -> None:
     shutil.rmtree(source_dir / ".git", ignore_errors=True)
 
 
+def _teardown_deployment_containers(submission_id: str) -> None:
+    """Stop & remove the Docker containers that were spun up during the submission pipeline.
+
+    This is a fully synchronous helper that can be called safely from a sync
+    background thread (i.e. from ``run_submission_pipeline_sync``) without
+    needing a running asyncio event loop.
+
+    Strategy:
+    1. Try ``docker compose down`` using the compose_project stored in the
+       deployment_store (set by ``run_deployment``).
+    2. Fall back to ``docker rm -f <container_id>`` using the container_id
+       persisted on the Project DB record.
+    """
+    import subprocess as _sp
+
+    # ── 1. compose down via deployment_store ────────────────────────
+    try:
+        from app.deployment.services.deployer.pipeline import deployment_store
+        dep = deployment_store.get(submission_id)
+        if dep and dep.compose_project:
+            compose_project = dep.compose_project
+            # Find any runtime dir that was used during deployment
+            runtime_candidates = [
+                Path(settings.data_dir) / "previews" / submission_id,
+                Path(settings.deployments_dir) / "activations" / submission_id,
+                Path(settings.projects_dir) / submission_id,
+            ]
+            runtime_dir = next((p for p in runtime_candidates if p.exists()), None)
+            if runtime_dir:
+                try:
+                    docker_client.compose_down(str(runtime_dir), compose_project, remove_volumes=True)
+                    logger.info("compose_down succeeded for submission %s (project=%s)", submission_id, compose_project)
+                    return
+                except Exception as exc:
+                    logger.warning("compose_down failed for %s: %s — will try per-container removal", submission_id, exc)
+            # compose down without a compose file: docker compose -p <project> down
+            try:
+                result = _sp.run(
+                    ["docker", "compose", "-p", compose_project, "down", "-v", "--remove-orphans"],
+                    capture_output=True, text=True, timeout=60,
+                )
+                if result.returncode == 0:
+                    logger.info("docker compose -p %s down succeeded for submission %s", compose_project, submission_id)
+                    return
+                logger.warning("docker compose -p %s down failed: %s", compose_project, result.stderr)
+            except Exception as exc:
+                logger.warning("docker compose -p down raised: %s", exc)
+    except Exception as exc:
+        logger.warning("Could not read deployment_store for %s: %s", submission_id, exc)
+
+    # ── 2. Fallback: remove individual container by stored container_id ──
+    try:
+        from app.db.database import SessionLocal as _SL
+        from app.models.schema import Project as _Project
+        with _SL() as _db:
+            proj = _db.query(_Project).filter(_Project.submission_uuid == submission_id).first()
+            container_id = proj.container_id if proj else None
+        if container_id:
+            result = _sp.run(
+                ["docker", "rm", "-f", container_id],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                logger.info("docker rm -f %s succeeded for submission %s", container_id, submission_id)
+            else:
+                logger.warning("docker rm -f %s failed: %s", container_id, result.stderr)
+    except Exception as exc:
+        logger.warning("Fallback container removal failed for %s: %s", submission_id, exc)
+
+    # ── 3. Clean up on-disk working directories ──────────────────────────
+    # These directories are only needed during the pipeline run. Once the
+    # pipeline has finished (and artifacts have been uploaded to R2), they
+    # can be safely removed to free disk space.
+
+    # 3a. data/submissions/<uuid>  (source code, artifacts, manifest)
+    try:
+        from .fs import get_submission_root
+        sub_root = get_submission_root(submission_id)
+        if sub_root.exists():
+            shutil.rmtree(sub_root, ignore_errors=True)
+            logger.info("Deleted submission working dir: %s", sub_root)
+    except Exception as exc:
+        logger.warning("Failed to delete submission dir for %s: %s", submission_id, exc)
+
+    # 3b. data/projects/<uuid>  (materialised source copy used by docker deployer)
+    try:
+        projects_dir = Path(settings.projects_dir) / submission_id
+        if projects_dir.exists():
+            shutil.rmtree(projects_dir, ignore_errors=True)
+            logger.info("Deleted projects dir: %s", projects_dir)
+    except Exception as exc:
+        logger.warning("Failed to delete projects dir for %s: %s", submission_id, exc)
+
+    # 3c. data/security_scan_results/<uuid>.json  (duplicate written by save_result())
+    try:
+        import os as _os
+        results_dir_env = _os.environ.get("RESULTS_DIR", "")
+        if results_dir_env:
+            scan_result = Path(results_dir_env) / f"{submission_id}.json"
+            if scan_result.exists():
+                scan_result.unlink(missing_ok=True)
+                logger.info("Deleted security scan result: %s", scan_result)
+    except Exception as exc:
+        logger.warning("Failed to delete security scan result for %s: %s", submission_id, exc)
+
+
 def run_submission_pipeline_sync(submission_id: str) -> None:
     asyncio.run(run_submission_pipeline(submission_id))
 
@@ -593,40 +700,16 @@ async def run_submission_pipeline(submission_id: str) -> None:
         manifest.deployment.setdefault("message", "Submission pipeline stopped unexpectedly.")
         manifest.deployment["unexpected_error"] = str(exc)
         write_manifest(manifest)
-        
-        try:
-            from app.deployment.api.submission_preview import _schedule_cleanup
-            _schedule_cleanup(submission_id)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f"Failed to schedule container cleanup: {e}")
-            
-        try:
-            from app.utils.archive import delete_directory
-            delete_directory()
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f"Failed to delete directory: {e}")
-            
-        return
-
-    manifest = read_manifest(submission_id)
-    _update_pipeline_status(manifest)
-    write_manifest(manifest)
-
-    try:
-        from app.deployment.api.submission_preview import _schedule_cleanup
-        _schedule_cleanup(submission_id)
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"Failed to schedule container cleanup: {e}")
-
-    try:
-        from app.utils.archive import delete_directory
+    else:
+        # All steps completed without raising — compute final pipeline_status
+        manifest = read_manifest(submission_id)
+        _update_pipeline_status(manifest)
+        write_manifest(manifest)
+    finally:
+        # Always tear down containers after the pipeline finishes (success or error).
+        # This runs inside asyncio.run() so we are in a sync context — safe to call.
         delete_directory()
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"Failed to delete directory: {e}")
+        _teardown_deployment_containers(submission_id)
 
 
 async def _run_cyber_scan_step(manifest: SubmissionManifest) -> None:
