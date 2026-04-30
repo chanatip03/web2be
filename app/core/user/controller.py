@@ -5,11 +5,15 @@ from app.db.database import get_db
 from app.utils.validator import get_current_user
 from .dto import (
     UpdateStudentRequest, UpdateTeacherRequest, UserResponse, 
-    StudentResponse, TeacherResponse
+    StudentResponse, TeacherResponse, ResetPasswordRequest, ChangePasswordRequest
 )
 from .service import (
     update_student_service, update_teacher_service, get_users_service,
-    get_current_user_info_service, soft_delete_user_service
+    get_current_user_info_service, soft_delete_user_service, update_user_password_service, change_user_password_service 
+)
+from app.utils.otp import (
+    get_otp_memory,
+    delete_otp_memory,
 )
 
 router = APIRouter(prefix="/user", tags=["User"])
@@ -91,3 +95,52 @@ def delete_user_endpoint(
         soft_delete_user_service(db, current_user, user_id)
     except ValueError as e:
         raise HTTPException(status_code=403, detail=str(e))
+    
+@router.post("/reset-password")
+def reset_password_confirm(
+    data: ResetPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    record = get_otp_memory(data.email)
+
+    if not record:
+        raise HTTPException(400, "OTP session not found")
+
+    payload = record["payload"]
+
+    if payload.get("purpose") != "reset_password":
+        raise HTTPException(400, "Invalid request")
+
+    if not payload.get("verified"):
+        raise HTTPException(400, "OTP not verified")
+    
+    if len(data.new_password) < 8:
+        raise HTTPException(400, "Password must be at least 8 characters")
+
+    update_user_password_service(
+        db=db,
+        email=data.email,
+        new_password=data.new_password
+    )
+
+    delete_otp_memory(data.email)
+
+    return {"message": "Password updated successfully"}
+
+@router.post("/change-password")
+def change_password(
+    data: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    if len(data.new_password) < 8:
+        raise HTTPException(400, "Password must be at least 8 characters")
+
+    change_user_password_service(
+        db=db,
+        user_id=current_user["id"],
+        old_password=data.old_password,
+        new_password=data.new_password
+    )
+
+    return {"message": "Password changed successfully"}

@@ -91,3 +91,35 @@ def update_teacher_data(db: Session, user: User, teacher: Teacher, user_data: di
     db.refresh(user)
     db.refresh(teacher)
     return user
+
+def update_password_by_email(
+    db: Session,
+    email: str,
+    password: str
+):
+    user = db.query(User).filter(User.email == email).first()
+
+    if not user:
+        return None
+
+    user.password = password
+    db.commit()
+    db.refresh(user)
+
+    return user
+
+def update_password_by_user_id(
+    db: Session,
+    user_id: int,
+    hashed_password: str
+):
+    user = db.query(User).filter(User.id == user_id).first()
+
+    if not user:
+        return None
+
+    user.password = hashed_password
+    db.commit()
+    db.refresh(user)
+
+    return user

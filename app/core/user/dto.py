@@ -128,4 +128,10 @@ class UpdateTeacherRequest:
             return {k: v for k, v in data.items() if v is not None}
         return data
 
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    new_password: str
 
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
