@@ -9,7 +9,7 @@ from app.db.database import get_db
 from app.models.schema import User
 from app.utils.r2 import upload_file
 from app.utils.validator import get_current_user
-from .dto import LoginRequest, MeResponse, Token, VerifyOtpRequest, register_request
+from .dto import LoginRequest, MeResponse, Token, VerifyOtpRequest, register_request, ResetPasswordRequest
 from .service import authenticate_admin, authenticate_user, get_user_data_service
 from app.utils.generate_token import create_access_token
 from app.utils.otp import (
@@ -21,6 +21,7 @@ from app.utils.otp import (
     delete_otp_memory,
     )
 from app.core.user.service import create_user_service
+from . import repository 
 
 router = APIRouter(prefix="/auth" , tags=["auth"])
 
@@ -67,8 +68,8 @@ def login(data: LoginRequest, response: Response, db: Session = Depends(get_db))
     return {"access_token": token}
 
 
-@router.post("/request-otp")
-async def request_otp(
+@router.post("/request-otp-register")
+async def request_otp_register(
     data: register_request = Depends(register_request.as_form),
     certificate: Optional[UploadFile] = File(None),
 ):
@@ -88,14 +89,43 @@ async def request_otp(
         email=data.email,
         otp_hash=hash_otp(otp),
         payload={
+            "purpose": "register",
             "role_id": data.role_id,
             "data": data.model_dump(),
         }
     )
     print("SAVE OTP FOR:", data.email)
+    send_otp_email(data.email, otp)
+    return {"message": "OTP sent for register"}
+
+@router.post("/request-otp-reset-password")
+def request_otp_reset_password(
+    data: ResetPasswordRequest,
+    db: Annotated[Session, Depends(get_db)]
+):
+
+    user = repository.get_user_by_email(db, data.email)
+
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found"
+        )
+
+    otp = generate_otp()
+
+    save_otp_memory(
+        email=data.email,
+        otp_hash=hash_otp(otp),
+        payload={
+            "purpose": "reset_password"
+        }
+    )
 
     send_otp_email(data.email, otp)
-    return {"message": "OTP sent"}
+
+    return {"message": "OTP sent for reset password"}
+
 
 @router.post("/verify-otp")
 def verify_otp(data: VerifyOtpRequest, db: Session = Depends(get_db)):
@@ -117,26 +147,34 @@ def verify_otp(data: VerifyOtpRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="OTP invalid")
 
     payload = record["payload"]
-    role_id: int = payload["role_id"]
-    user_data: dict = payload["data"]
+    purpose = payload.get("purpose")
 
-    try:
-        create_user_service(
-            db,
-            role_id,
-            user_data["first_name"],
-            user_data["last_name"],
-            user_data["email"],
-            user_data["password"],
-            user_data.get("academy"),
-            certificate_url=user_data.get("certificate_url"),
-            student_id=user_data.get("student_id"),
-        )
-    finally:
-        delete_otp_memory(email)
+    if purpose == "register":
 
-    return {"message": "Register success"}
+        role_id: int = payload["role_id"]
+        user_data: dict = payload["data"]
 
+        try:
+            create_user_service(
+                db,
+                role_id,
+                user_data["first_name"],
+                user_data["last_name"],
+                user_data["email"],
+                user_data["password"],
+                user_data.get("academy"),
+                certificate_url=user_data.get("certificate_url"),
+                student_id=user_data.get("student_id"),
+            )
+        finally:
+            delete_otp_memory(email)
+
+        return {"message": "Register success"}
+    
+    elif purpose == "reset_password":
+        payload["verified"] = True
+        return {"message": "OTP verified"}
+    raise HTTPException(status_code=400, detail="Invalid OTP purpose")
 
 @router.get("/me", response_model=MeResponse)
 async def get_user_data(
