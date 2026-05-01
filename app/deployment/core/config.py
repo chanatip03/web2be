@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     readiness_timeout_seconds: int = 45
     readiness_poll_interval_seconds: float = 2.0
     readiness_probe_paths: str = "/health,/healthz,/api/health,/status,/ping,/api,/"
+    preview_ttl_seconds: int = 10 * 60
+    stopped_deployment_cleanup_delay_seconds: int = 10 * 60
 
     # ── Bundles ─────────────────────────────────────────────────
     # If false, bundle creation will NOT pull missing DB base images.

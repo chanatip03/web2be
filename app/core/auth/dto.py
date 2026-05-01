@@ -1,8 +1,7 @@
+import enum
 from typing import List, Optional
 from fastapi import Form
 from pydantic import BaseModel, ConfigDict, EmailStr
-
-from app.models.schema import RoleEnum
 
 
 class Token(BaseModel):
@@ -59,11 +58,17 @@ class RegisterRequest(BaseModel):
 register_request = RegisterRequest
 
 
+class AuthRoleEnum(str, enum.Enum):
+    student = "student"
+    teacher = "teacher"
+    admin = "admin"
+
+
 class RoleResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    name: RoleEnum
+    name: AuthRoleEnum
 
 class UserBaseResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

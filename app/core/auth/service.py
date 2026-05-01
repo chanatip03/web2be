@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 
 from app.utils.generate_token import verify_password
+from app.models.schema import Admin
 from . import repository
 
 def authenticate_user(db: Session, email: str, password: str):
@@ -24,7 +25,10 @@ def authenticate_admin(db: Session, email: str, password: str):
 
     return admin
 
-def get_user_data_service(db: Session, current_user: int):
-    user = repository.get_user_data(db, current_user)
+def get_user_data_service(db: Session, current_user: dict):
+    if current_user.get("role") == "admin":
+        return db.query(Admin).filter(Admin.id == current_user["id"]).first()
+
+    user = repository.get_user_data(db, current_user["id"])
 
     return user

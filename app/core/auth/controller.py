@@ -6,7 +6,7 @@ import uuid
 from fastapi import File, Response, APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 from app.db.database import get_db
-from app.models.schema import User
+from app.models.schema import Admin, User
 from app.utils.r2 import upload_file
 from app.utils.validator import get_current_user
 from .dto import LoginRequest, MeResponse, Token, VerifyOtpRequest, register_request
@@ -143,13 +143,29 @@ async def get_user_data(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[dict, Depends(get_current_user)],
 ):
-    user = get_user_data_service(db, current_user["id"])
+    user = get_user_data_service(db, current_user)
     return map_user_to_me_response(user)
 
 def map_user_to_me_response(user: User):
+    if isinstance(user, Admin):
+        return {
+            "user": {
+                "id": user.id,
+                "first_name": "Admin",
+                "last_name": "",
+                "email": user.email,
+                "image_url": None,
+                "academy": None,
+            },
+            "roles": {
+                "id": 0,
+                "name": "admin",
+            },
+        }
+
     return {
         "user": user,
-                "roles": {
+        "roles": {
             "id": user.role.id,
             "name": user.role.name.value, 
         } if user.role else None,

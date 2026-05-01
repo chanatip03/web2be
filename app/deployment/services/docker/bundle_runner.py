@@ -199,6 +199,7 @@ def run_from_bundle(
         sp["url"] = f"http://localhost:{sp['host_port']}"
 
     services = list(set(sp["service"] for sp in service_ports))
+    image_refs = _parse_compose_image_refs(compose_text)
 
     primary_url = _pick_primary_url(service_ports)
     return {
@@ -207,6 +208,7 @@ def run_from_bundle(
         "compose_file": str(compose_file),
         "services": services,
         "service_ports": service_ports,
+        "image_refs": image_refs,
         "primary_url": primary_url,
     }
 
@@ -281,3 +283,18 @@ def _pick_primary_url(service_ports: List[Dict[str, Any]]) -> Optional[str]:
         if pref in by_service:
             return by_service[pref]
     return next(iter(by_service.values()), None)
+
+
+def _parse_compose_image_refs(compose_text: str) -> List[str]:
+    image_refs: List[str] = []
+    image_re = re.compile(r'^\s*image:\s*["\']?([^"\'#]+)')
+
+    for line in compose_text.splitlines():
+        match = image_re.match(line)
+        if not match:
+            continue
+        image_ref = match.group(1).strip()
+        if image_ref and image_ref not in image_refs:
+            image_refs.append(image_ref)
+
+    return image_refs

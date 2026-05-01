@@ -179,6 +179,14 @@ class DockerClient:
         except Exception:
             pass
 
+    def remove_images(self, image_refs: List[str]) -> None:
+        for image_ref in image_refs:
+            try:
+                self.client.images.remove(image=image_ref, force=False, noprune=False)
+                logger.info("Removed image %s", image_ref)
+            except Exception as exc:
+                logger.warning("Failed to remove image %s: %s", image_ref, exc)
+
     # ── Compose ──────────────────────────────────────────────────
 
     def compose_up(
@@ -267,6 +275,28 @@ class DockerClient:
         except Exception as exc:
             logger.warning("Failed to get compose port mappings for %s: %s", project_name, exc)
             return []
+
+    def compose_stop(
+        self,
+        project_dir: str,
+        project_name: str | None = None,
+    ) -> None:
+        import subprocess
+
+        cmd = ["docker", "compose"]
+        if project_name:
+            cmd += ["-p", project_name]
+        cmd += ["stop"]
+
+        result = subprocess.run(
+            cmd,
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            raise DockerError(f"docker compose stop failed:\n{result.stderr}")
 
     def get_compose_logs(
         self, project_dir: str, project_name: str | None = None, tail: int = 200,
