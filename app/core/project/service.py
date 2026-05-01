@@ -5,7 +5,7 @@ from .repository import get_project_by_id, get_projects_by_assignment_id, update
 from app.core.assignment.repository import get_assignment_by_id
 from app.core.classroom.repository import is_classroom_of_teacher
 from app.core.user.repository import get_teacher_by_user_id
-from app.utils.otp import send_grading_email
+from app.utils.otp import send_grading_discord, send_grading_email
 from app.models.schema import Project, SubmissionTypeEnum
 import io
 import re
@@ -178,8 +178,8 @@ def update_project_grading_service(db: Session, current_user: dict, project_id: 
     if not project:
         raise ValueError("Project not found")
 
-    assignment_id = None
-    if project.group_id and project.group:
+    assignment_id = project.assignment_id
+    if not assignment_id and project.group_id and project.group:
         assignment_id = project.group.assignment_id
 
     if current_user.get("role") == "teacher":
@@ -200,13 +200,30 @@ def update_project_grading_service(db: Session, current_user: dict, project_id: 
         assignment = get_assignment_by_id(db, assignment_id)
         if assignment:
             assignment_name = assignment.title
-            target_emails = set()
+            notification_targets = set()
             if project.group_id and project.group:
                 for member in project.group.members:
                     if member.student and member.student.user:
-                        target_emails.add(member.student.user.email)
-            
-            for email in target_emails:
-                background_tasks.add_task(send_grading_email, to_email=email, assignment_name=assignment_name)
+                        notification_targets.add((member.student.user.email, member.student.discord_user_id))
+            elif project.student and project.student.user:
+                notification_targets.add((project.student.user.email, project.student.discord_user_id))
+
+            for email, discord_user_id in notification_targets:
+                if email:
+                    background_tasks.add_task(
+                        send_grading_email,
+                        to_email=email,
+                        assignment_name=assignment_name,
+                        score=score,
+                        feedback=feedback,
+                    )
+                if discord_user_id:
+                    background_tasks.add_task(
+                        send_grading_discord,
+                        discord_user_id=discord_user_id,
+                        assignment_name=assignment_name,
+                        score=score,
+                        feedback=feedback,
+                    )
 
     return project

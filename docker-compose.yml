@@ -20,6 +20,24 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    build: .
+    container_name: web2-migrate
+    depends_on:
+      database:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://admin:admin@database:5432/web2
+    command: >
+      sh -c "
+      echo 'Running migrations...' &&
+      alembic upgrade head &&
+      echo 'Running seed...' &&
+      python -m app.db.seed &&
+      echo 'Migrate one'"
+
   scanner:
     build: .
     container_name: web2-student-scanner
