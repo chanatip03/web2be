@@ -54,6 +54,8 @@ async def check_assignment_plagiarism(db: Session, assignment: Assignment):
     language_name = "javascript"
     if assignment.language and assignment.language.name:
         language_name = assignment.language.name.lower()
+    if assignment.project_type and assignment.project_type.name and assignment.project_type.name.lower() in {"fe", "frontend", "frontend-only"}:
+        language_name = "frontend"
     
     # 2. Get all projects (submissions) for this assignment
     projects = db.query(Project).filter(Project.assignment_id == assignment.id).all()
