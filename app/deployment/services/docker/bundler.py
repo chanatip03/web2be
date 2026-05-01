@@ -110,6 +110,7 @@ async def create_bundle(
         # 2. Get or generate docker-compose.yml
         compose_path = tmp_path / "docker-compose.yml"
         compose_content = _get_compose_content(deployment, project_path)
+        compose_content = _make_compose_portable(compose_content, deployment)
         compose_path.write_text(compose_content, encoding="utf-8")
 
         # 2b. Copy any required runtime assets referenced by compose (e.g. seed.sql)
@@ -192,46 +193,154 @@ def _get_compose_content(deployment: DeploymentStatus, project_path: Path) -> st
 
     # Generate a simple one
     image = deployment.image_tag or "app:latest"
-    port = deployment.host_port or 8000
+    # Resolve the correct container port
+    container_port = 8000
+    if deployment.service_ports:
+        # Pick the first available port mapping or matching service
+        for sp in deployment.service_ports:
+            if sp.container_port:
+                container_port = sp.container_port
+                break
+    elif deployment.host_port:
+        # Heuristic: if we only have host_port and it's > 1024, it's likely a mapped port
+        # and the internal port is probably 80 or 3000 (frontend) or 8000 (backend).
+        if deployment.deploy_mode == "frontend-only":
+            container_port = 80
+        else:
+            container_port = 8000
+
     return f"""# Auto-generated for portable deployment
 services:
   app:
     image: {image}
     ports:
-      - "{port}:{port}"
+      - "0:{container_port}"
     env_file:
       - .env
     restart: unless-stopped
 """
 
 
-def _make_compose_portable(content: str) -> str:
-    """Make compose file portable by adding env_file reference."""
+def _make_compose_portable(content: str, deployment: Optional[DeploymentStatus] = None) -> str:
+    """Make compose file portable: strip build paths, remove obsolete version, and fix ports."""
     import re
 
-    # Add env_file if not already present
-    if "env_file" not in content:
-        # Add env_file under each service that has 'image:'
-        lines = content.split("\n")
-        new_lines = []
-        in_service = False
-        for line in lines:
-            new_lines.append(line)
-            # Detect service-level image: or build: line
-            stripped = line.strip()
-            if stripped.startswith("image:") and in_service:
-                indent = len(line) - len(line.lstrip())
-                new_lines.append(" " * indent + "env_file:")
-                new_lines.append(" " * indent + "  - .env")
-            if stripped.endswith(":") and not stripped.startswith("#") and not stripped.startswith("-"):
-                in_service = True
-        content = "\n".join(new_lines)
+    # 1. Remove obsolete 'version' attribute to avoid warnings
+    content = re.sub(r"(?m)^\s*version\s*:\s*['\"].*['\"]\s*$", "", content)
 
-    # Replace dynamic host ports with container ports for portability
-    # e.g., "54321:8000" → "8000:8000"
+    # 2. Strip all 'build:' blocks (including indented children)
+    # We replace them with a marker comment to avoid line count shifts and handle multi-line blocks.
+    content = re.sub(r"(?m)^(\s+)build:\s*\n(\1\s+.*\n?)*", r"\1# build: removed\n", content)
+    content = re.sub(r"(?m)^(\s+)build:\s*[^\n]+\n?", r"\1# build: removed\n", content)
+
+    # 3. Process line-by-line
+    lines = content.splitlines()
+    final_lines = []
+    current_service = None
+    in_services = False
+    
+    image_tags = {}
+    if deployment:
+        image_tags = deployment.image_tags or {}
+        if not image_tags and deployment.image_tag:
+            image_tags = {"app": deployment.image_tag}
+            if deployment.deploy_mode == "frontend-only":
+                image_tags["frontend"] = deployment.image_tag
+            elif deployment.deploy_mode == "backend-only":
+                image_tags["backend"] = deployment.image_tag
+
+    service_has_image = set()
+    service_has_env = set()
+
+    # Pre-pass to see what each service has
+    temp_service = None
+    in_services = False
+    for line in lines:
+        stripped = line.strip()
+        # Detect top-level keys to manage services block state
+        if line and not line.startswith(" ") and not line.startswith("#") and ":" in line:
+            in_services = (stripped == "services:")
+            temp_service = None
+            if not in_services:
+                continue
+
+        if stripped == "services:":
+            continue
+
+        m = re.match(r"^ {2}([a-zA-Z0-9_-]+):", line)
+        if m and in_services:
+            temp_service = m.group(1)
+            continue
+        if temp_service:
+            if stripped.startswith("image:"):
+                service_has_image.add(temp_service)
+            if stripped.startswith("env_file:"):
+                service_has_env.add(temp_service)
+
+    # Main pass
+    in_services = False
+    for line in lines:
+        stripped = line.strip()
+        # Detect top-level keys to manage services block state
+        if line and not line.startswith(" ") and not line.startswith("#") and ":" in line:
+            in_services = (stripped == "services:")
+            current_service = None
+            if not in_services:
+                final_lines.append(line)
+                continue
+
+        if stripped == "services:":
+            in_services = True
+            final_lines.append(line)
+            continue
+        
+        m = re.match(r"^ {2}([a-zA-Z0-9_-]+):", line)
+        if m and in_services:
+            current_service = m.group(1)
+            final_lines.append(line)
+            # If the service had NO image line but had a build block (now # build: removed), 
+            # we'll add the image line here or wait for the marker.
+            if current_service not in service_has_image:
+                tag = image_tags.get(current_service) or (deployment.image_tag if deployment else None) or "app:latest"
+                final_lines.append(f"    image: {tag}")
+                if current_service not in service_has_env:
+                    final_lines.append("    env_file:")
+                    final_lines.append("      - .env")
+                    service_has_env.add(current_service)
+                service_has_image.add(current_service)
+            continue
+
+        if current_service:
+            indent = " " * (len(line) - len(line.lstrip()))
+            
+            # If we see an image line, ensure it uses our built tag if possible
+            if stripped.startswith("image:"):
+                tag = image_tags.get(current_service)
+                if tag:
+                    final_lines.append(f"{indent}image: {tag}")
+                else:
+                    final_lines.append(line)
+                
+                if current_service not in service_has_env:
+                    final_lines.append(f"{indent}env_file:")
+                    final_lines.append(f"{indent}  - .env")
+                    service_has_env.add(current_service)
+                continue
+
+            if "# build: removed" in line:
+                # We already handled image addition above if it was missing.
+                # Just skip the marker.
+                continue
+
+        final_lines.append(line)
+
+    content = "\n".join(final_lines)
+
+    # 4. Replace specific host ports with 0 for dynamic allocation on the target machine.
+    # This ensures that multiple bundles can run simultaneously without port conflicts.
     content = re.sub(
         r'"(\d+):(\d+)"',
-        lambda m: f'"{m.group(2)}:{m.group(2)}"',
+        lambda m: f'"0:{m.group(2)}"',
         content,
     )
 

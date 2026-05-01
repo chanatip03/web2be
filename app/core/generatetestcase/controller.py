@@ -33,6 +33,8 @@ test_definition_store: JsonStore[TestDefinition] = JsonStore(
 class TestDefinitionCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     prompt: str
+    assignment_title: Optional[str] = None
+    assignment_description: Optional[str] = None
 
 
 class TestSuiteUpdateRequest(BaseModel):
@@ -42,6 +44,24 @@ class TestSuiteUpdateRequest(BaseModel):
 class TestRunRequest(BaseModel):
     project_id: str
     preview_url: Optional[str] = None
+
+
+def _build_effective_prompt(
+    prompt: str,
+    assignment_title: Optional[str] = None,
+    assignment_description: Optional[str] = None,
+) -> str:
+    parts: list[str] = []
+
+    if assignment_title:
+        parts.append(f"Assignment title: {assignment_title}")
+
+    if assignment_description:
+        parts.append(f"Assignment description: {assignment_description}")
+
+    parts.append(f"Generation request: {prompt}")
+
+    return "\n".join(parts)
 
 
 def _find_preview_url_for_project(project_id: str) -> str:
@@ -67,19 +87,25 @@ async def create_test_definition(body: TestDefinitionCreateRequest):
     tech_stack = []
     preview_url = ""
 
+    effective_prompt = _build_effective_prompt(
+        body.prompt,
+        body.assignment_title,
+        body.assignment_description,
+    )
+
     test_id = str(uuid.uuid4())
     context_id = f"test-{test_id}"
 
     test_cases = await generate_test_cases(
         project_id=context_id,
-        user_prompt=body.prompt,
+        user_prompt=effective_prompt,
         project_type=project_type,
         tech_stack=tech_stack,
         preview_url=preview_url,
     )
     suite_content = await generate_robot_suite_content(
         context_id=context_id,
-        user_prompt=body.prompt,
+        user_prompt=effective_prompt,
         project_type=project_type,
         tech_stack=tech_stack,
         preview_url=preview_url,
@@ -87,7 +113,7 @@ async def create_test_definition(body: TestDefinitionCreateRequest):
 
     definition = TestDefinition(
         test_id=test_id,
-        prompt=body.prompt,
+        prompt=effective_prompt,
         suite_content=suite_content,
         version=1,
         created_at=datetime.now(),

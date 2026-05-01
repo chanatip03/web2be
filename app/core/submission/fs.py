@@ -82,9 +82,19 @@ def write_manifest(manifest: SubmissionManifest) -> Path:
 
 def read_manifest(submission_id: str) -> SubmissionManifest:
     path = get_manifest_path(submission_id)
-    if not path.exists():
-        raise FileNotFoundError(f"Submission manifest not found: {submission_id}")
-    return SubmissionManifest.model_validate_json(path.read_text(encoding="utf-8"))
+    last_error: Exception | None = None
+    for _ in range(20):
+        try:
+            if not path.exists():
+                raise FileNotFoundError(f"Submission manifest not found: {submission_id}")
+            return SubmissionManifest.model_validate_json(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
+            last_error = exc
+            time.sleep(0.1)
+
+    if last_error is not None:
+        raise last_error
+    raise FileNotFoundError(f"Submission manifest not found: {submission_id}")
 
 
 def iter_submission_manifests() -> Iterator[SubmissionManifest]:

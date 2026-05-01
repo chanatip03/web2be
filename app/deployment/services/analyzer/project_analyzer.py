@@ -71,9 +71,10 @@ async def analyze_project(project_path: str) -> ProjectAnalysis:
     except Exception as exc:
         logger.warning("LLM analysis failed: %s", exc)
 
-    # 4. No heuristic fallback — LLM-only mode
+    # 4. Heuristic fallback — if LLM failed, try to guess from file structure
     if analysis is None:
-        raise AnalysisError("LLM analysis failed and heuristic fallback is disabled. Check LLM connectivity.")
+        logger.info("Using heuristic fallback for project analysis")
+        analysis = _heuristic_analysis(root, file_samples, parsed_code)
 
     # 4b. Post-process: fix common Node backend port mis-detections (e.g., default 3000).
     try:
@@ -193,5 +194,91 @@ async def analyze_project(project_path: str) -> ProjectAnalysis:
             "summary": parsed_code.get("summary", {}),
         }
         analysis.backend_info = backend_info
+
+    return analysis
+
+
+def _heuristic_analysis(
+    root: Path,
+    file_samples: Dict[str, str],
+    parsed_code: Dict[str, Any],
+) -> ProjectAnalysis:
+    """Guess project type and details from file structure and code scanner."""
+    
+    # 1. Look for core signals
+    has_package_json = (root / "package.json").exists()
+    has_requirements = (root / "requirements.txt").exists() or (root / "pyproject.toml").exists()
+    has_go_mod = (root / "go.mod").exists()
+    has_pom = (root / "pom.xml").exists()
+    
+    # Check for any .html files
+    has_html = any(root.rglob("*.html"))
+    
+    # Check for subdirectories
+    has_frontend_dir = (root / "frontend").is_dir()
+    has_backend_dir = (root / "backend").is_dir() or (root / "server").is_dir()
+    
+    # 2. Determine project type
+    if has_frontend_dir and has_backend_dir:
+        project_type = "fullstack"
+    elif has_backend_dir or has_requirements or has_go_mod or has_pom:
+        project_type = "backend-only"
+    elif has_package_json:
+        # Check if it looks like a frontend package.json
+        pkg_text = (root / "package.json").read_text(encoding="utf-8", errors="ignore").lower()
+        is_frontend = any(x in pkg_text for x in ["react", "vue", "vite", "svelte", "next", "angular"])
+        project_type = "frontend-only" if is_frontend else "backend-only"
+    elif has_html:
+        project_type = "frontend-only" # Static HTML
+    else:
+        project_type = "fullstack" # Default fallback
+        
+    analysis = ProjectAnalysis(
+        project_type=project_type,
+        tech_stack=[],
+        summary=f"Heuristic analysis: detected {project_type} project.",
+    )
+    
+    # 3. Populate basic info
+    if project_type in ("frontend-only", "fullstack"):
+        fe_path = "."
+        if has_frontend_dir:
+            fe_path = "frontend"
+        
+        # Check for package.json specifically in the frontend path
+        fe_pkg = (root / fe_path / "package.json").exists()
+            
+        analysis.frontend_info = {
+            "path": fe_path,
+            "framework": "vanilla" if not fe_pkg else "node",
+            "port": 3000 if fe_pkg else 80, # Nginx default for static
+            "detected": True,
+            "is_static_html": not fe_pkg and has_html
+        }
+        analysis.tech_stack.append("frontend")
+        
+    if project_type in ("backend-only", "fullstack"):
+        be_path = "."
+        if has_backend_dir:
+            be_path = "backend" if (root / "backend").exists() else "server"
+            
+        be_port = 8000
+        if has_package_json:
+            be_port = 3000
+            
+        analysis.backend_info = {
+            "path": be_path,
+            "port": be_port,
+            "language": "javascript" if has_package_json else "python",
+            "detected": True
+        }
+        analysis.tech_stack.append("backend")
+        
+    if has_requirements:
+        analysis.tech_stack.append("python")
+    if has_go_mod:
+        analysis.tech_stack.append("go")
+    if has_package_json:
+        analysis.tech_stack.append("nodejs")
 
     return analysis

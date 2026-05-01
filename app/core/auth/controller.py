@@ -182,3 +182,4 @@ async def logout(response: Response):
         secure=False 
     )
     return {"message": "Logged out"}
+

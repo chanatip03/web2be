@@ -97,10 +97,11 @@ async def create_assignment(
 @router.get("/", response_model=List[AssignmentResponse])
 def get_assignments(
     classroom_id: int,
-     db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[Dict, Depends(get_current_user)],
 ):
     try:
-        assignments = get_assignments_service(db, classroom_id)
+        assignments = get_assignments_service(db, classroom_id, current_user)
         return assignments
     except HTTPException:
         raise

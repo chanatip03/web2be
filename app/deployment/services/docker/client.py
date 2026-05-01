@@ -1,9 +1,9 @@
-"""Thin wrapper around the Docker SDK — isolates all Docker engine interactions."""
-
 from __future__ import annotations
 
 import logging
+import os
 import socket
+import subprocess
 from typing import Any, Dict, List, Optional
 
 from app.deployment.core.exceptions import DockerError
@@ -197,12 +197,17 @@ class DockerClient:
         build: bool = True,
     ) -> str:
         """Run docker compose up -d in the given directory."""
-        import subprocess
-
+        host_project_dir = self._translate_to_host_path(project_dir)
+        
         cmd = ["docker", "compose"]
+        # Use the container-internal path for -f so the CLI can read it
+        cmd += ["-f", f"{project_dir}/docker-compose.yml"]
+            
         if project_name:
             cmd += ["-p", project_name]
         cmd += ["up", "-d"]
+        if not build:
+            cmd += ["--no-build"]
         if build:
             cmd += ["--build"]
 
@@ -224,16 +229,52 @@ class DockerClient:
         *,
         remove_volumes: bool = False,
     ) -> None:
-        import subprocess
-
+        host_project_dir = self._translate_to_host_path(project_dir)
+        
         cmd = ["docker", "compose"]
+        if host_project_dir != project_dir:
+            cmd += ["-f", f"{host_project_dir}/docker-compose.yml"]
+            
         if project_name:
             cmd += ["-p", project_name]
         cmd += ["down", "--remove-orphans"]
         if remove_volumes:
             cmd += ["--volumes"]
 
-        subprocess.run(cmd, cwd=project_dir, capture_output=True, timeout=60)
+        subprocess.run(
+            cmd, 
+            cwd=project_dir if host_project_dir == project_dir else "/",
+            capture_output=True, 
+            timeout=60
+        )
+
+    def get_compose_port_mappings(self, project_name: str) -> List[Dict[str, Any]]:
+        """Query Docker for the actual host ports assigned to a compose project's services."""
+        try:
+            # Filters match labels applied by Docker Compose. 
+            # We use all=True because containers might be in 'created' or 'starting' state
+            # but still have their ports assigned in metadata.
+            containers = self.client.containers.list(
+                all=True, 
+                filters={"label": f"com.docker.compose.project={project_name}"}
+            )
+            mappings = []
+            for container in containers:
+                service = container.labels.get("com.docker.compose.service", "unknown")
+                ports = container.attrs.get("NetworkSettings", {}).get("Ports", {})
+                if not ports:
+                    continue
+                for c_port, host_bindings in ports.items():
+                    if host_bindings:
+                        mappings.append({
+                            "service": service,
+                            "container_port": int(c_port.split("/")[0]),
+                            "host_port": int(host_bindings[0]["HostPort"]),
+                        })
+            return mappings
+        except Exception as exc:
+            logger.warning("Failed to get compose port mappings for %s: %s", project_name, exc)
+            return []
 
     def compose_stop(
         self,
@@ -369,4 +410,44 @@ class DockerClient:
 
 
 # Singleton
+    def _translate_to_host_path(self, path: str) -> str:
+        """Translate a container-internal path to a host-valid path if HOST_DATA_DIR is set."""
+        from app.deployment.core.config import settings
+        host_data_dir = settings.host_data_dir or os.environ.get("HOST_DATA_DIR")
+        if not host_data_dir:
+            return path
+            
+        # Internal data_dir is typically /app/app/deployment/data
+        internal_data_dir = settings.data_dir
+        
+        # Normalize paths for comparison (forward slashes)
+        abs_path = os.path.abspath(path).replace("\\", "/")
+        abs_internal = os.path.abspath(internal_data_dir).replace("\\", "/")
+        host_data_dir = host_data_dir.replace("\\", "/")
+        
+        # Helper to normalize and convert to Docker-friendly host paths
+        def _cleanup_path(p: str) -> str:
+            # Strip leading slash from Windows drive paths (e.g. /C:/Users -> C:/Users)
+            if p.startswith("/") and len(p) > 2 and p[2] == ":":
+                p = p[1:]
+            # Convert C:/Users -> /c/Users (standard Docker host path format)
+            if len(p) > 1 and p[1] == ":":
+                drive = p[0].lower()
+                p = f"/{drive}{p[2:]}"
+            return p
+            
+        abs_path = _cleanup_path(abs_path)
+        abs_internal = _cleanup_path(abs_internal)
+        host_data_dir = _cleanup_path(host_data_dir)
+        
+        logger.debug("Path translation: abs_path=%s, abs_internal=%s, host_data_dir=%s", abs_path, abs_internal, host_data_dir)
+        
+        if abs_path.startswith(abs_internal):
+            relative = abs_path[len(abs_internal):].lstrip("/")
+            translated = f"{host_data_dir}/{relative}" if relative else host_data_dir
+            logger.info("Translated internal path %s to host path %s", path, translated)
+            return translated
+            
+        return path
+
 docker_client = DockerClient()

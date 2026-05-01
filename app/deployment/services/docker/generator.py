@@ -87,12 +87,15 @@ class DockerGenerator:
             await self._collect_llm_advisory(BUILD_SPEC_SYSTEM, user_prompt, "build_spec")
             return self._default_build_spec(analysis)
 
-        result = await llm_client.analyze_json(BUILD_SPEC_SYSTEM, user_prompt)
-
-        if not result:
-            raise DockerError("LLM failed to generate a build spec — no fallback (LLM-only mode)")
-
-        return result
+        try:
+            result = await llm_client.analyze_json(BUILD_SPEC_SYSTEM, user_prompt)
+            if not result:
+                logger.warning("LLM returned empty build spec, using default fallback")
+                return self._default_build_spec(analysis)
+            return result
+        except Exception as exc:
+            logger.warning("LLM failed to generate build spec, using default fallback: %s", exc)
+            return self._default_build_spec(analysis)
 
     # ── Generic (single) Dockerfile ──────────────────────────────
 
@@ -123,13 +126,22 @@ class DockerGenerator:
                 return self._deterministic_frontend_dockerfile(analysis)
             return self._deterministic_backend_dockerfile(analysis)
 
-        raw = await llm_client.generate(DOCKERFILE_SYSTEM, user_prompt)
-        dockerfile = extract_text_content(raw)
+        try:
+            raw = await llm_client.generate(DOCKERFILE_SYSTEM, user_prompt)
+            dockerfile = extract_text_content(raw)
 
-        if not dockerfile or "FROM" not in dockerfile.upper():
-            raise DockerError("LLM failed to generate a valid Dockerfile")
+            if not dockerfile or "FROM" not in dockerfile.upper():
+                logger.warning("LLM generated invalid Dockerfile, using deterministic fallback")
+                if analysis.project_type == "frontend-only":
+                    return self._deterministic_frontend_dockerfile(analysis)
+                return self._deterministic_backend_dockerfile(analysis)
 
-        return dockerfile
+            return dockerfile
+        except Exception as exc:
+            logger.warning("LLM failed to generate Dockerfile, using deterministic fallback: %s", exc)
+            if analysis.project_type == "frontend-only":
+                return self._deterministic_frontend_dockerfile(analysis)
+            return self._deterministic_backend_dockerfile(analysis)
 
     # ── Frontend Dockerfile ──────────────────────────────────────
 
@@ -154,17 +166,18 @@ class DockerGenerator:
             await self._collect_llm_advisory(DOCKERFILE_FRONTEND_SYSTEM, user_prompt, "dockerfile_frontend")
             return self._deterministic_frontend_dockerfile(analysis)
 
-        raw = None
         try:
             raw = await llm_client.generate(DOCKERFILE_FRONTEND_SYSTEM, user_prompt)
+            dockerfile = extract_text_content(raw)
+
+            if not dockerfile or "FROM" not in dockerfile.upper():
+                logger.warning("LLM generated invalid frontend Dockerfile, using deterministic fallback")
+                return self._deterministic_frontend_dockerfile(analysis)
+
+            return dockerfile
         except Exception as exc:
-            raise DockerError(f"LLM failed to generate a frontend Dockerfile: {exc}") from exc
-        dockerfile = extract_text_content(raw)
-
-        if not dockerfile or "FROM" not in dockerfile.upper():
-            raise DockerError("LLM failed to generate a frontend Dockerfile")
-
-        return dockerfile
+            logger.warning("LLM failed to generate frontend Dockerfile, using deterministic fallback: %s", exc)
+            return self._deterministic_frontend_dockerfile(analysis)
 
     # ── Backend Dockerfile ───────────────────────────────────────
 
@@ -189,17 +202,18 @@ class DockerGenerator:
             await self._collect_llm_advisory(DOCKERFILE_BACKEND_SYSTEM, user_prompt, "dockerfile_backend")
             return self._deterministic_backend_dockerfile(analysis)
 
-        raw = None
         try:
             raw = await llm_client.generate(DOCKERFILE_BACKEND_SYSTEM, user_prompt)
             dockerfile = extract_text_content(raw)
+
+            if not dockerfile or "FROM" not in dockerfile.upper():
+                logger.warning("LLM generated invalid backend Dockerfile, using deterministic fallback")
+                return self._deterministic_backend_dockerfile(analysis)
+
+            return dockerfile
         except Exception as exc:
-            raise DockerError(f"LLM failed to generate a backend Dockerfile: {exc}") from exc
-
-        if not dockerfile or "FROM" not in dockerfile.upper():
-            raise DockerError("LLM failed to generate a backend Dockerfile")
-
-        return dockerfile
+            logger.warning("LLM failed to generate backend Dockerfile, using deterministic fallback: %s", exc)
+            return self._deterministic_backend_dockerfile(analysis)
 
     # ── Repair ───────────────────────────────────────────────────
 
@@ -315,6 +329,33 @@ class DockerGenerator:
         fe = analysis.frontend_info or {}
         frontend_path = fe.get("path") or "frontend"
         frontend_port = int(fe.get("port", 3000) or 3000)
+        
+        # If it's a static HTML project (plain files, no package.json), 
+        # we don't need node/npm/build steps. Just nginx.
+        if fe.get("is_static_html"):
+            lines = [
+                "FROM nginx:alpine",
+                "RUN apk add --no-cache curl",
+                "RUN printf '%s\\n' \\",
+                f"  'server {{' \\",
+                f"  '  listen {frontend_port};' \\",
+                "  '  server_name _;' \\",
+                "  '  root /usr/share/nginx/html;' \\",
+                "  '  index index.html;' \\",
+                "  '  location / {' \\",
+                "  '    try_files $uri $uri/ /index.html;' \\",
+                "  '  }' \\",
+                "  '}' \\",
+                "  > /etc/nginx/conf.d/default.conf",
+                f"COPY {frontend_path}/ /usr/share/nginx/html",
+                f"EXPOSE {frontend_port}",
+                "HEALTHCHECK --interval=10s --timeout=4s --start-period=5s --retries=5 \\",
+                f"  CMD curl -sf http://127.0.0.1:{frontend_port}/ || exit 1",
+                "CMD [\"nginx\", \"-g\", \"daemon off;\"]",
+            ]
+            return "\n".join(lines) + "\n"
+
+        # Standard Node-based frontend
         package_manager = fe.get("package_manager") or "npm"
         install_cmd = "npm ci" if package_manager == "npm" else f"{package_manager} install"
         build_cmd = fe.get("build_command") or f"{package_manager} run build"

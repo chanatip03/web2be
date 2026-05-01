@@ -78,11 +78,7 @@ class Student(Base):
     user = relationship("User", back_populates="student")
     classrooms = relationship("ClassroomMember", back_populates="student")
     group_members = relationship("GroupMember", back_populates="student")
-    submission_of = relationship(
-    "SubmissionOf",
-    back_populates="student",
-    cascade="all, delete-orphan"
-)
+    projects = relationship("Project", back_populates="student")
 
 class Teacher(Base):
     __tablename__ = "teachers"
@@ -171,6 +167,7 @@ class Assignment(Base):
     project_type = relationship("ProjectType", back_populates="assignments")
     language = relationship("Language", back_populates="assignments")
     groups = relationship("Group", back_populates="assignment", cascade="all, delete-orphan")
+    projects = relationship("Project", back_populates="assignment", cascade="all, delete-orphan")
 
 class Attachment(Base):
     __tablename__ = "attachments"
@@ -207,31 +204,42 @@ class Project(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
+    assignment_id = Column(Integer, ForeignKey("assignments.id", ondelete="CASCADE"), nullable=True)
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=True)
+    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=True)
 
     submission_type = Column(Enum(SubmissionTypeEnum, name="submission_type_enum"), nullable=False)
+    submission_uuid = Column(String, nullable=True)
     project_source_url = Column(String, nullable=True)
     env = Column(String, nullable=False)
+    container_id = Column(String, nullable=True)
+    container_resource = Column(String, nullable=True)
 
     testcase_result = Column(String, nullable=True)
     cybersecurity_result = Column(String, nullable=True)
     score = Column(Integer, nullable=True)
     feedback = Column(String, nullable=True)
+    is_late = Column(Boolean, default=False, nullable=False)
 
     created_date = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_date = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     deleted_date = Column(DateTime(timezone=True), nullable=True)
     
     group = relationship("Group", back_populates="projects")
-    submission_of = relationship("SubmissionOf",back_populates="project",cascade="all, delete-orphan")
+    student = relationship("Student", back_populates="projects")
+    assignment = relationship("Assignment", back_populates="projects")
+
+    @property
+    def group_name(self):
+        return self.group.name if self.group else None
 
     @property
     def students(self):
         if self.group_id and self.group:
             return [member.student for member in self.group.members if member.student]
-        elif self.submission_of:
-            submissions = self.submission_of if isinstance(self.submission_of, list) else [self.submission_of]
-            return [so.student for so in submissions if so.student]
+        # Individual submission — return the directly linked student
+        if self.student:
+            return [self.student]
         return []
 
 class Group(Base):

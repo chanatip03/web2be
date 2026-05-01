@@ -72,12 +72,13 @@ def create_assignment_service(
     return assignment
 
 
-def get_assignments_service(db: Session, classroom_id: int):
+def get_assignments_service(db: Session, classroom_id: int, current_user: dict = None):
     classroom = get_classroom_by_id(db, classroom_id)
     if not classroom:
         raise HTTPException(status_code=404, detail="Classroom not found")
 
-    return get_assignments_by_classroom(db, classroom_id)
+    is_student = current_user is None or current_user.get("role") == "student"
+    return get_assignments_by_classroom(db, classroom_id, is_public_only=is_student)
 
 def get_assignment_by_id_service(db: Session, assignment_id: int):
     assignment = get_assignment_by_id(db, assignment_id)

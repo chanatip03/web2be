@@ -27,6 +27,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from app.deployment.core.config import settings
 from app.deployment.services.deployer.pipeline import deployment_store, project_store
 from app.deployment.services.docker.client import docker_client
+from app.db.database import SessionLocal
+from app.models.schema import Project as DBProject
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +38,8 @@ router = APIRouter(tags=["Preview"])
 _PREVIEW_PROJECT_COOKIE = "preview_project_id"
 
 
-_UUID_RE = re.compile(
-    r"(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+_PROJECT_ID_RE = re.compile(
+    r"(?i)^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32}|\d+)$"
 )
 
 
@@ -47,13 +49,13 @@ def _infer_project_id_from_referer(request: Request) -> Optional[str]:
         return None
 
     match = re.search(
-        r"(?i)/preview/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:/|$)",
+        r"(?i)/preview/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32}|\d+)(?:/|$)",
         referer,
     )
     if not match:
         return None
     project_id = match.group(1)
-    if not _UUID_RE.match(project_id):
+    if not _PROJECT_ID_RE.match(project_id):
         return None
     return project_id
 
@@ -106,7 +108,7 @@ def _infer_project_id_from_request(request: Request) -> Optional[str]:
     if project_id:
         return project_id
     cookie = request.cookies.get(_PREVIEW_PROJECT_COOKIE)
-    if cookie and _UUID_RE.match(cookie):
+    if cookie and _PROJECT_ID_RE.match(cookie):
         return cookie
     # Avoid cross-project collisions: only infer without context when there is
     # exactly one active deployment.
@@ -120,13 +122,13 @@ def _infer_project_id_for_frontend_compat(request: Request) -> Optional[str]:
     like /register), preferring fullstack deployments when multiple are active.
     """
     project_id = _infer_project_id_from_referer(request)
-    if project_id and _UUID_RE.match(project_id):
+    if project_id and _PROJECT_ID_RE.match(project_id):
         dep = _find_deployment(project_id)
         if dep and (dep.deploy_mode or "").lower() != "backend-only":
             return project_id
 
     cookie = request.cookies.get(_PREVIEW_PROJECT_COOKIE)
-    if cookie and _UUID_RE.match(cookie):
+    if cookie and _PROJECT_ID_RE.match(cookie):
         dep = _find_deployment(cookie)
         if dep and (dep.deploy_mode or "").lower() != "backend-only":
             return cookie
@@ -160,11 +162,10 @@ async def root_spa_route_compat(request: Request):
 
 def _extract_go_gin_endpoints(server_src: str) -> list[dict[str, Any]]:
     """Best-effort extractor for Gin route registrations in Go code."""
-    prefix_by_var: dict[str, str] = {"router": ""}
+    prefix_by_var: dict[str, str] = {"router": "", "r": "", "e": "", "app": "", "mux": "", "server": ""}
 
     group_pat = re.compile(
-        r"^\s*(?P<var>[A-Za-z_][A-Za-z0-9_]*)\s*(?::=|=)\s*(?P<parent>[A-Za-z_][A-Za-z0-9_]*)\.Group\(\s*\"(?P<prefix>[^\"]*)\"\s*\)",
-        flags=re.MULTILINE,
+        r"(?P<var>[A-Za-z_][A-Za-z0-9_]*)\s*(?::=|=)\s*(?P<parent>[A-Za-z_][A-Za-z0-9_]*)\.Group\(\s*\"(?P<prefix>[^\"]*)\"\s*\)",
     )
     for m in group_pat.finditer(server_src):
         var = m.group("var")
@@ -174,8 +175,8 @@ def _extract_go_gin_endpoints(server_src: str) -> list[dict[str, Any]]:
         prefix_by_var[var] = _normalize_joined_path(parent_prefix, group_prefix)
 
     route_pat = re.compile(
-        r"^\s*(?P<var>[A-Za-z_][A-Za-z0-9_]*)\.(?P<method>GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\(\s*\"(?P<path>[^\"]+)\"",
-        flags=re.MULTILINE,
+        r"(?P<var>[A-Za-z_][A-Za-z0-9_]*)\.(?P<method>GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\(\s*\"(?P<path>[^\"]+)\"",
+        flags=re.IGNORECASE,
     )
 
     endpoints: list[dict[str, Any]] = []
@@ -405,7 +406,13 @@ def _extract_backend_endpoints_from_files(project_id: str) -> list[dict[str, Any
     candidates = []
     if backend_path:
         candidates.append(root / backend_path)
-    candidates.append(root / "backend")
+    
+    # Common backend folder names
+    for d in ("backend", "server", "api", "app", "srv"):
+        p = root / d
+        if p.exists() and p.is_dir():
+            candidates.append(p)
+    
     candidates.append(root)
 
     server_file = None
@@ -459,63 +466,77 @@ def _extract_backend_endpoints_from_files(project_id: str) -> list[dict[str, Any
         dedup = {(ep.get("method"), ep.get("path")): ep for ep in endpoints if ep.get("method") and ep.get("path")}
         return list(dedup.values())
 
-    require_map: dict[str, Path] = {}
-    for var, req in re.findall(r"const\s+(\w+)\s*=\s*require\(['\"]([^'\"]+)['\"]\)", server_src):
-        if not req.startswith("."):
-            continue
-        route_path = (server_file.parent / req).resolve()
-        if route_path.is_dir():
-            route_path = route_path / "index.js"
-        elif route_path.suffix == "":
-            route_path = route_path.with_suffix(".js")
-        require_map[var] = route_path
-
-    # ESM/TypeScript import map: `import { userRoute } from './routes/users'`
-    import_map: dict[str, Path] = {}
-    for var, imp in re.findall(
-        r"import\s*\{\s*(\w+)\s*\}\s*from\s*['\"]([^'\"]+)['\"]",
-        server_src,
-    ):
-        if not imp.startswith("."):
-            continue
-        route_path = (server_file.parent / imp).resolve()
-        if route_path.is_dir():
-            # Best-effort: common patterns
+    def _resolve_imp(imp_path: str) -> Path | None:
+        if not imp_path.startswith("."):
+            return None
+        # Handle .js extension in imports (common in ESM/TS)
+        clean_path = imp_path
+        if clean_path.endswith(".js"):
+            clean_path = clean_path[:-3]
+        elif clean_path.endswith(".ts"):
+            clean_path = clean_path[:-3]
+        
+        base_route = (server_file.parent / clean_path).resolve()
+        if base_route.is_dir():
             for leaf in ("index.ts", "index.js"):
-                p = route_path / leaf
-                if p.exists():
-                    route_path = p
-                    break
-        elif route_path.suffix == "":
-            # Try TS first then JS
-            ts = route_path.with_suffix(".ts")
-            js = route_path.with_suffix(".js")
-            if ts.exists():
-                route_path = ts
-            else:
-                route_path = js
-        import_map[var] = route_path
+                if (base_route / leaf).exists():
+                    return base_route / leaf
+        
+        for ext in (".ts", ".js", ".tsx", ".jsx"):
+            p = base_route.with_suffix(ext)
+            if p.exists():
+                return p
+        if base_route.exists() and base_route.is_file():
+            return base_route
+        return None
+
+    # Track both imports and requires
+    file_map: dict[str, Path] = {}
+    
+    # 1. Require: const x = require('./y')
+    for var, req in re.findall(r"(?:const|let|var|)\s*(\w+)\s*=\s*require\(['\"]([^'\"]+)['\"]\)", server_src):
+        res = _resolve_imp(req)
+        if res:
+            file_map[var] = res
+
+    # 2. Imports
+    # Default: import x from 'y'
+    for var, imp in re.findall(r"import\s+(\w+)\s+from\s+['\"]([^'\"]+)['\"]", server_src):
+        res = _resolve_imp(imp)
+        if res:
+            file_map[var] = res
+    
+    # Named: import { x, y as z } from 'y'
+    for block, imp in re.findall(r"import\s*\{([^}]+)\}\s*from\s*['\"]([^'\"]+)['\"]", server_src):
+        res = _resolve_imp(imp)
+        if res:
+            for part in block.split(","):
+                name = part.strip().split(" as ")[-1].strip()
+                if name:
+                    file_map[name] = res
+
+    # Star: import * as x from 'y'
+    for var, imp in re.findall(r"import\s*\*\s*as\s+(\w+)\s+from\s+['\"]([^'\"]+)['\"]", server_src):
+        res = _resolve_imp(imp)
+        if res:
+            file_map[var] = res
 
     service_routes: list[tuple[str, Path]] = []
-    for prefix, var in re.findall(r"app\.use\(\s*['\"]([^'\"]+)['\"]\s*,\s*(\w+)\s*\)", server_src):
-        route_file = require_map.get(var)
+    # Match app.use('/path', var), app.route('/path', var), router.use(...), etc.
+    mount_pat = re.compile(r"\.(?:use|route|mount)\(\s*['\"]([^'\"]+)['\"]\s*,\s*(\w+)\s*\)")
+    for prefix, var in mount_pat.findall(server_src):
+        route_file = file_map.get(var)
         if route_file and route_file.exists():
             service_routes.append((prefix, route_file))
-
-    # Hono-style route mounts: `app.route('/users', userRoute)`
-    hono_routes: list[tuple[str, str, Path]] = []
-    for prefix, var in re.findall(
-        r"\bapp\.route\(\s*['\"]([^'\"]+)['\"]\s*,\s*(\w+)\s*\)",
-        server_src,
-    ):
-        route_file = import_map.get(var)
-        if route_file and route_file.exists():
-            hono_routes.append((prefix, var, route_file))
 
     endpoints: list[dict[str, Any]] = []
 
     def _extract_body_fields(handler_src: str) -> list[str]:
-        match = re.search(r"const\s*{\s*([^}]+)\s*}\s*=\s*req\.body\s*;?", handler_src)
+        # Support both req.body and any variable that looks like a body (best effort)
+        match = re.search(r"const\s*{\s*([^}]+)\s*}\s*=\s*\w+\.body\s*;?", handler_src)
+        if not match:
+            match = re.search(r"const\s*{\s*([^}]+)\s*}\s*=\s*req\s*;?", handler_src) # some destructure req directly
+        
         if not match:
             return []
         raw = match.group(1)
@@ -537,11 +558,12 @@ def _extract_backend_endpoints_from_files(project_id: str) -> list[dict[str, Any
                 out.append(f)
         return out
 
-    for method, path in re.findall(r"app\.(get|post|put|delete|patch|options|head)\(\s*['\"]([^'\"]+)['\"]", server_src, flags=re.IGNORECASE):
+    # Scan server_file itself for direct routes
+    for method, path in re.findall(r"\.(get|post|put|delete|patch|options|head)\(\s*['\"]([^'\"]+)['\"]", server_src, flags=re.IGNORECASE):
         endpoints.append({"method": method.upper(), "path": _normalize_joined_path("", path)})
 
     route_pattern = re.compile(
-        r"router\.(get|post|put|delete|patch|options|head)\(\s*['\"]([^'\"]+)['\"]",
+        r"\b\w+\.(get|post|put|delete|patch|options|head)\(\s*['\"]([^'\"]+)['\"]",
         flags=re.IGNORECASE,
     )
     for prefix, route_file in service_routes:
@@ -568,27 +590,30 @@ def _extract_backend_endpoints_from_files(project_id: str) -> list[dict[str, Any
                 "body_fields": body_fields,
             })
 
-    # Hono routes: scan the mounted route files for `<var>.<method>('/path', ...)`
-    for prefix, var, route_file in hono_routes:
-        try:
-            src = route_file.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            continue
+    # FALLBACK: If we found very few endpoints, scan the entire 'routes' directory if it exists.
+    # This catches routes that are mounted dynamically or using patterns we didn't trace.
+    if len(endpoints) < 3:
+        for base in candidates:
+            rdir = base / "routes"
+            if rdir.exists() and rdir.is_dir():
+                for f in rdir.rglob("*.[jt]s"):
+                    if f in [route_file for _, route_file in service_routes]:
+                        continue
+                    try:
+                        src = f.read_text(encoding="utf-8", errors="ignore")
+                    except Exception:
+                        continue
+                    for m in route_pattern.finditer(src):
+                        method = m.group(1).upper()
+                        path = m.group(2)
+                        # Guess prefix based on filename if not traced
+                        guess_prefix = "/api" if "api" in f.name.lower() else ""
+                        endpoints.append({
+                            "method": method,
+                            "path": _normalize_joined_path(guess_prefix, path)
+                        })
 
-        # e.g. userRoute.get('/', ...)
-        method_pattern = re.compile(
-            rf"\b{re.escape(var)}\.(get|post|put|delete|patch|options|head)\(\s*['\"]([^'\"]+)['\"]",
-            flags=re.IGNORECASE,
-        )
-        for m in method_pattern.finditer(src):
-            method = m.group(1).upper()
-            path = m.group(2)
-            endpoints.append({
-                "method": method,
-                "path": _normalize_joined_path(prefix, path),
-            })
-
-    dedup = {(ep["method"], ep["path"]): ep for ep in endpoints}
+    dedup = {(ep.get("method"), ep.get("path")): ep for ep in endpoints if ep.get("method") and ep.get("path")}
     return list(dedup.values())
 
 
@@ -1095,7 +1120,18 @@ def _find_deployment(project_id: str):
     updated successful deployment. This avoids routing to stale ports when a
     project has multiple historical "success" records.
     """
-    all_deps = [dep for dep in deployment_store.list_all() if dep.project_id == project_id]
+    effective_id = project_id
+    # Support integer project IDs by looking up their submission_uuid in DB
+    if project_id.isdigit():
+        try:
+            with SessionLocal() as db:
+                db_project = db.query(DBProject).filter(DBProject.id == int(project_id)).first()
+                if db_project and db_project.submission_uuid:
+                    effective_id = db_project.submission_uuid
+        except Exception as e:
+            logger.warning("Failed to resolve project ID %s: %s", project_id, e)
+
+    all_deps = [dep for dep in deployment_store.list_all() if dep.project_id == effective_id]
     if not all_deps:
         return None
 
@@ -1122,7 +1158,7 @@ def _get_service_url(deployment, service: Optional[str] = None) -> Optional[str]
     if service:
         if deployment.service_ports:
             for sp in deployment.service_ports:
-                if sp.service == service:
+                if sp.service == service and sp.url and sp.url.startswith("http"):
                     return sp.url
 
         # Metadata can be stale after restart; recover from compose runtime.
@@ -1134,10 +1170,13 @@ def _get_service_url(deployment, service: Optional[str] = None) -> Optional[str]
         # Fall back to primary: frontend > backend > app > first available
         for pref in ("frontend", "backend", "app"):
             for sp in deployment.service_ports:
-                if sp.service == pref:
+                if sp.service == pref and sp.url and sp.url.startswith("http"):
                     return sp.url
-
-        return deployment.service_ports[0].url
+        # last resort: first port with a valid url
+        for sp in deployment.service_ports:
+            if sp.url and sp.url.startswith("http"):
+                return sp.url
+        return None
 
     # Legacy fallback
     if deployment.preview_url:
@@ -1396,33 +1435,63 @@ def _is_probably_static_asset(path: str) -> bool:
     if p.startswith("assets/") or p.startswith("static/"):
         return True
     # Common file extensions served by the frontend container.
-    for ext in (
-        ".js",
-        ".mjs",
-        ".cjs",
-        ".css",
-        ".map",
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".gif",
-        ".svg",
-        ".webp",
-        ".ico",
-        ".txt",
-        ".json",
-        ".woff",
-        ".woff2",
-        ".ttf",
-        ".eot",
-        ".otf",
-        ".mp4",
-        ".webm",
-        ".pdf",
-    ):
-        if p.endswith(ext):
-            return True
-    return False
+    return p.endswith(
+        (
+            ".html",
+            ".htm",
+            ".js",
+            ".mjs",
+            ".css",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".svg",
+            ".ico",
+            ".json",
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".eot",
+            ".txt",
+            ".map",
+            ".pdf",
+        )
+    )
+
+
+def _get_project_deploy_mode(project_id: str, deployment: Any) -> str:
+    """Determine the effective deploy mode using DB type with heuristic fallback."""
+    deploy_mode = (deployment.deploy_mode or "").strip().lower()
+
+    # Step 1: Explicit DB lookup (most reliable)
+    # Only attempt if project_id looks like an integer (DB projects.id is int, not UUID)
+    try:
+        if project_id.isdigit():
+            with SessionLocal() as db:
+                db_project = db.query(DBProject).filter(DBProject.id == int(project_id)).first()
+                if db_project and db_project.assignment and db_project.assignment.project_type:
+                    p_type = db_project.assignment.project_type.name.lower()
+                    if p_type == "frontend":
+                        return "frontend-only"
+                    if p_type == "backend":
+                        return "backend-only"
+                    if p_type in ("project", "fullstack"):
+                        return "fullstack"
+    except Exception as e:
+        logger.warning("DB project type lookup failed for %s: %s", project_id, e)
+
+    # Step 2: Heuristic fallback
+    if deploy_mode in ("", "auto", "unknown"):
+        known_services = {sp.service for sp in (deployment.service_ports or [])}
+        if "backend" in known_services and not any(s in known_services for s in ("frontend", "app", "client", "web", "ui")):
+            return "backend-only"
+        if any(s in known_services for s in ("frontend", "app", "client", "web", "ui")):
+            return "frontend-only"
+        if len(known_services) == 1:
+            return "frontend-only"
+
+    return deploy_mode or "frontend-only"
 
 
 def _normalized_filename_token(value: str) -> str:
@@ -1559,7 +1628,7 @@ async def preview_index(project_id: str, request: Request):
             return RedirectResponse(url=f"{canonical_path}?{request.url.query}", status_code=307)
         return RedirectResponse(url=canonical_path, status_code=307)
 
-    deploy_mode = (deployment.deploy_mode or "").strip().lower()
+    deploy_mode = _get_project_deploy_mode(project_id, deployment)
 
     # UX parity with v1:
     # - frontend-only: open app directly
@@ -1568,12 +1637,22 @@ async def preview_index(project_id: str, request: Request):
     if deploy_mode == "backend-only":
         return HTMLResponse(_swagger_ui_html(project_id))
 
-    if deploy_mode == "fullstack":
+    if deploy_mode in ("fullstack", "frontend-only"):
         base = _get_service_url(deployment, "frontend") or _get_service_url(deployment)
         if base:
             known = {sp.service for sp in (deployment.service_ports or [])}
-            rewrite_api_base = f"/preview/{project_id}/backend" if "backend" in known else None
-            return await _proxy_request_to(project_id, base, "", request, prefix=f"/preview/{project_id}", rewrite_api_base=rewrite_api_base)
+            # For fullstack, we use the root preview URL as the base.
+            # Our internal Nginx config (in compose.py) already handles /api proxying to backend.
+            rewrite_api_base = f"/preview/{project_id}" if "backend" in known else None
+            
+            return await _proxy_request_to(
+                project_id, 
+                base, 
+                "", 
+                request, 
+                prefix=f"/preview/{project_id}", 
+                rewrite_api_base=rewrite_api_base
+            )
 
     # Return service map as HTML or JSON
     services = []
@@ -2029,7 +2108,7 @@ async def preview_duplicate_project_uploads(
     # Only treat this as a "duplicate id" compat path when the dup segment
     # looks like a UUID. Otherwise it may be a real service name (e.g. "backend")
     # and we must not hijack the request.
-    if not _UUID_RE.match(dup_project_id):
+    if not _PROJECT_ID_RE.match(dup_project_id):
         return await preview_service_proxy(project_id, dup_project_id, request, path=f"uploads/{path}" if path else "uploads")
 
     if dup_project_id == project_id:
@@ -2054,7 +2133,7 @@ async def preview_duplicate_project_api(
     # Only treat this as a "duplicate id" compat path when the dup segment
     # looks like a UUID. Otherwise it may be a real service name (e.g. "backend")
     # and we must not hijack the request.
-    if not _UUID_RE.match(dup_project_id):
+    if not _PROJECT_ID_RE.match(dup_project_id):
         return await preview_service_proxy(project_id, dup_project_id, request, path=f"api/{path}" if path else "api")
 
     if dup_project_id == project_id:
@@ -2088,6 +2167,8 @@ async def preview_swagger_ui(project_id: str):
     deployment = _find_deployment(project_id)
     if not deployment:
         return HTMLResponse("<h1>No active deployment</h1><p>Deploy the project first.</p>", 404)
+    # Use UUID for internal lookups, numeric ID for UI consistency if preferred
+    # But _swagger_ui_html uses spec_url which needs project_id
     return HTMLResponse(_swagger_ui_html(project_id))
 
 
@@ -2096,7 +2177,8 @@ async def preview_swagger_json(project_id: str):
     deployment = _find_deployment(project_id)
     if not deployment:
         return JSONResponse({"detail": "No active deployment"}, status_code=404)
-    return JSONResponse(_build_openapi_doc(project_id, deployment))
+    # CRITICAL: Use deployment.project_id (UUID) for internal logic
+    return JSONResponse(_build_openapi_doc(deployment.project_id, deployment))
 
 
 # ── Per-service HTTP Proxy ───────────────────────────────────────
@@ -2138,15 +2220,12 @@ async def preview_service_proxy(project_id: str, service: str, request: Request,
         full_subpath = f"{service}/{path}" if path else service
         prefix = f"/preview/{project_id}"
 
-        deploy_mode = (deployment.deploy_mode or "").strip().lower()
+        deploy_mode = _get_project_deploy_mode(project_id, deployment)
         backend_base = None
         if deploy_mode in {"backend-only", "fullstack"}:
             backend_base = _get_service_url(deployment, "backend")
 
         should_route_to_backend = False
-        # Backend-only: keep normal routing to the primary service, but strip
-        # Origin/Referer only for API-like paths. This avoids surprising behavior
-        # for non-API routes while still working around strict upstream CORS.
         sub_l = full_subpath.lstrip("/").lower()
         api_like_backend_only = deploy_mode == "backend-only" and (
             sub_l == "api"
@@ -2166,7 +2245,7 @@ async def preview_service_proxy(project_id: str, service: str, request: Request,
                 should_route_to_backend = True
             else:
                 seg = full_subpath.lstrip("/").split("/", 1)[0]
-                if seg and seg in _backend_path_prefixes(project_id):
+                if (seg and seg in _backend_path_prefixes(project_id)) or (sub_l == "api" or sub_l.startswith("api/")):
                     should_route_to_backend = True
 
         if should_route_to_backend:
@@ -2175,8 +2254,9 @@ async def preview_service_proxy(project_id: str, service: str, request: Request,
             strip_request_origin = True
         else:
             base = _get_service_url(deployment)
-            # Only rewrite when the primary service is the frontend.
-            if frontend_base and base != frontend_base:
+            if deploy_mode == "fullstack" and "backend" in known:
+                rewrite_api_base = f"/preview/{project_id}"
+            else:
                 rewrite_api_base = None
 
         path = full_subpath
@@ -2235,6 +2315,10 @@ async def _proxy_request_to(
     body_override: bytes | None = None,
 ) -> Response:
     """Forward an HTTP request to the upstream container."""
+    # Guard against missing or invalid base URLs before attempting proxy
+    if not base_url or not base_url.startswith("http"):
+        logger.warning("_proxy_request_to called with invalid base_url=%r, returning 502", base_url)
+        return HTMLResponse("<h1>Container not reachable</h1><p>The container may still be starting.</p>", status_code=502)
     # In Docker-in-Docker mode, the scanner container cannot reach student containers
     # via localhost (which resolves to the scanner itself). Use host.docker.internal
     # so the request reaches the Windows Docker Desktop host where student ports are bound.
