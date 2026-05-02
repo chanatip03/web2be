@@ -2,7 +2,6 @@ from fastapi import APIRouter
 from app.core.auth.controller import router as auth_router
 from app.core.admin.controller import router as admin_router
 from app.core.plagiarism.controller import router as plagiarism_router
-from app.core.security_scan import security_router
 from app.core.classroom.controller import router as classroom_router
 from app.core.classroommember.controller import router as classroommember_router
 from app.core.assignment.controller import router as assignment_router
