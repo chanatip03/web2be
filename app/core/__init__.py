@@ -12,6 +12,7 @@ from app.core.generatetestcase.controller import router as testcase_router
 from app.core.discordoauth.controller import router as discord_oauth_router
 from app.core.user.controller import router as user_router
 from app.core.project.controller import router as project_router
+from app.core.security_scan.controller import router as security_router
 
 api_router = APIRouter()
 
@@ -28,3 +29,4 @@ api_router.include_router(testcase_router)
 api_router.include_router(discord_oauth_router)
 api_router.include_router(user_router)
 api_router.include_router(project_router)
+api_router.include_router(security_router)
