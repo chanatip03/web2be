@@ -43,7 +43,7 @@ async def update_student_endpoint(
     user_id: int, 
     db: Session = Depends(get_db), 
     current_user: dict = Depends(get_current_user),
-    payload: UpdateStudentRequest = Depends(),
+    payload: UpdateStudentRequest = Depends(UpdateStudentRequest.as_form),
 ):
     user_data = payload.dict(exclude_unset=True)
     student_id = user_data.pop("student_id", None)
@@ -67,7 +67,7 @@ async def update_teacher_endpoint(
     user_id: int, 
     db: Session = Depends(get_db), 
     current_user: dict = Depends(get_current_user),
-    payload: UpdateTeacherRequest = Depends(),
+    payload: UpdateTeacherRequest = Depends(UpdateTeacherRequest.as_form),
 ):
     user_data = payload.dict(exclude_unset=True)
     image = user_data.pop("image_url", None)

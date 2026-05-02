@@ -63,6 +63,18 @@ The user will describe what tests they need. Generate a complete Robot Framework
 test suite (.robot file) based on their description.
 
 Requirements:
+- If the input contains `Assignment title:` and/or `Assignment description:`,
+  treat them as authoritative product requirements for the testcase.
+- If the input contains `Assignment project type: frontend`, prefer browser-style UI tests
+  with SeleniumLibrary that interact with the described controls instead of only checking raw HTML.
+- If the input contains `Assignment project type: backend`, prefer RequestsLibrary API tests.
+- The generated suite must verify behavior that is directly relevant to that assignment,
+  not a generic sample project.
+- Use the assignment context to infer the main user flow, important edge cases,
+  expected UI/API behavior, and validation rules.
+- If the assignment description gives exact element ids, button names, messages, routes,
+  or validation rules, use them directly in the generated tests.
+- For frontend assignments, cover the core happy paths and any explicitly stated edge cases.
 - Use Robot Framework syntax
 - Include *** Settings ***, *** Variables ***, *** Test Cases ***, and *** Keywords *** sections
 - Use SeleniumLibrary for UI tests and RequestsLibrary for API tests
@@ -88,6 +100,10 @@ TEST_GEN_USER = """\
 
 TEST_LIST_SYSTEM = """\
 You are a QA engineer. The user will describe their testing needs.
+If the input contains `Assignment title:` and/or `Assignment description:`,
+you must use them as the main context and generate test cases specific to that assignment.
+If the input contains `Assignment project type: frontend`, generate browser/UI-oriented test cases
+that cover the core user actions and the explicit edge cases from the assignment.
 Return a JSON array of test case objects, each with:
 {
   "name": "descriptive test name",

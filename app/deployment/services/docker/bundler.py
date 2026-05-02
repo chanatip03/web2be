@@ -148,17 +148,33 @@ async def create_bundle(
 
 def _save_images_to_tar(image_tags: List[str], output_path: Path) -> None:
     """Save multiple Docker images into a single tar file."""
+    import docker
     import subprocess
-    from app.deployment.core.exceptions import DockerError
-    
-    if not image_tags:
-        raise ValueError("No images found to save")
-        
-    cmd = ["docker", "save", "-o", str(output_path)] + image_tags
-    logger.info("Running docker save for %d images: %s", len(image_tags), image_tags)
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    client = docker.from_env()
+
+    missing_tags: List[str] = []
+    for tag in image_tags:
+        try:
+            client.images.get(tag)
+        except docker.errors.ImageNotFound:
+            missing_tags.append(tag)
+
+    if missing_tags:
+        missing = ", ".join(missing_tags)
+        raise ValueError(
+            "Cannot create bundle because required image(s) are missing locally: "
+            f"{missing}"
+        )
+
+    cmd = ["docker", "save", "-o", str(output_path), *image_tags]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
     if result.returncode != 0:
-        raise DockerError(f"Failed to save images {image_tags}:\n{result.stderr}")
+        raise ValueError(f"docker save failed: {result.stderr or result.stdout}")
 
 
 def _get_compose_content(deployment: DeploymentStatus, project_path: Path) -> str:

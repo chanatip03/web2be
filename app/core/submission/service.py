@@ -11,8 +11,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse, urlunparse
 
-from app.utils.archive import delete_directory
 import httpx
 from fastapi import BackgroundTasks, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
@@ -40,7 +40,11 @@ from app.deployment.services.deployer.pipeline import (
 )
 from app.models.schema import Project, SubmissionTypeEnum
 from app.core.generatetestcase.services.runner import run_robot_tests_with_suite_content
-from app.utils.r2 import R2_PUBLIC_URL, get_file_bytes, upload_file as r2_upload_file
+from app.utils.r2 import (
+    R2_PUBLIC_URL,
+    get_file_bytes,
+    upload_file as r2_upload_file,
+)
 
 from .dto import SubmissionAcceptedResponse, SubmissionArtifactListResponse
 from .fs import (
@@ -207,6 +211,19 @@ def _submission_source_name(source_ref: str | None, source_type: str) -> str:
     return "submission"
 
 
+def _resolve_test_runner_preview_url(preview_url: str) -> str:
+    parsed = urlparse(preview_url)
+    if parsed.hostname not in {"localhost", "127.0.0.1"}:
+        return preview_url
+
+    host = "host.docker.internal"
+    if parsed.port:
+        netloc = f"{host}:{parsed.port}"
+    else:
+        netloc = host
+    return urlunparse(parsed._replace(netloc=netloc))
+
+
 def _command_exists(command: str) -> bool:
     return shutil.which(command) is not None
 
@@ -357,8 +374,6 @@ def _persist_project_results(
         db.commit()
     finally:
         db.close()
-
-
 def _ensure_submission_access(
     manifest: SubmissionManifest,
     db: Session,
@@ -647,13 +662,17 @@ def _teardown_deployment_containers(submission_id: str) -> None:
     # pipeline has finished (and artifacts have been uploaded to R2), they
     # can be safely removed to free disk space.
 
-    # 3a. data/submissions/<uuid>  (source code, artifacts, manifest)
+    # 3a. data/submissions/<uuid>
+    # Keep manifest + artifacts for status polling and downloads after the
+    # pipeline completes; remove only large transient inputs/workspace.
     try:
-        from .fs import get_submission_root
         sub_root = get_submission_root(submission_id)
         if sub_root.exists():
-            shutil.rmtree(sub_root, ignore_errors=True)
-            logger.info("Deleted submission working dir: %s", sub_root)
+            for transient_name in ("original", "source"):
+                transient_path = sub_root / transient_name
+                if transient_path.exists():
+                    shutil.rmtree(transient_path, ignore_errors=True)
+                    logger.info("Deleted submission transient dir: %s", transient_path)
     except Exception as exc:
         logger.warning("Failed to delete submission dir for %s: %s", submission_id, exc)
 
@@ -706,9 +725,8 @@ async def run_submission_pipeline(submission_id: str) -> None:
         _update_pipeline_status(manifest)
         write_manifest(manifest)
     finally:
-        # Always tear down containers after the pipeline finishes (success or error).
-        # This runs inside asyncio.run() so we are in a sync context — safe to call.
-        delete_directory()
+        # Always tear down containers after the pipeline finishes (success or
+        # error), then remove this submission's local working directories.
         _teardown_deployment_containers(submission_id)
 
 
@@ -739,13 +757,26 @@ async def _run_cyber_scan_step(manifest: SubmissionManifest) -> None:
             content_type="application/json",
         )
         set_artifact_download_urls(manifest)
+        cyber_download_url = artifact.download_url
+        cyber_download_source = "local"
+        try:
+            key = f"submissions/{manifest.submission_id}/scan.json"
+            _, uploaded_url = r2_upload_file(key, cyber_path.read_bytes(), content_type="application/json")
+            manifest.r2_artifacts["cyber_scan"] = uploaded_url
+            cyber_download_url = uploaded_url
+            cyber_download_source = "r2"
+        except Exception:
+            pass
         manifest.cyber = {
+            **normalized,
             "status": "success",
             "languages": validation["languages"],
             "file_count": validation["file_count"],
             "issues_found": normalized.get("issues_found", 0),
             "artifact_id": artifact.artifact_id,
-            "download_url": artifact.download_url,
+            "download_url": cyber_download_url,
+            "fallback_download_url": artifact.download_url,
+            "download_source": cyber_download_source,
         }
         _set_step_finished(
             manifest,
@@ -996,7 +1027,8 @@ async def _run_testcase_step(manifest: SubmissionManifest) -> None:
 
     try:
         suite_content = await _load_testcase_suite_content(manifest.testcase_source_url)
-        suite_content = suite_content.replace("http://localhost:3000", preview_url.rstrip("/"))
+        testcase_base_url = _resolve_test_runner_preview_url(preview_url.rstrip("/"))
+        suite_content = suite_content.replace("http://localhost:3000", testcase_base_url)
 
         suite_dir = get_submission_root(manifest.submission_id) / "artifacts" / "testcase"
         suite_dir.mkdir(parents=True, exist_ok=True)
@@ -1020,6 +1052,13 @@ async def _run_testcase_step(manifest: SubmissionManifest) -> None:
         testcase_artifacts = {
             "suite": suite_artifact.artifact_id,
         }
+        testcase_urls: dict[str, str] = {}
+        try:
+            key = f"submissions/{manifest.submission_id}/testcase/test_suite.robot"
+            _, uploaded_url = r2_upload_file(key, suite_path.read_bytes(), content_type="text/plain")
+            testcase_urls["test_suite.robot"] = uploaded_url
+        except Exception:
+            pass
         result_dir = Path(settings.projects_dir) / manifest.submission_id / "tests" / "results" / result.test_id
         for filename, content_type in (
             ("report.html", "text/html"),
@@ -1038,6 +1077,12 @@ async def _run_testcase_step(manifest: SubmissionManifest) -> None:
                 content_type=content_type,
             )
             testcase_artifacts[filename] = artifact.artifact_id
+            try:
+                key = f"submissions/{manifest.submission_id}/testcase/{filename}"
+                _, uploaded_url = r2_upload_file(key, copied.read_bytes(), content_type=content_type)
+                testcase_urls[filename] = uploaded_url
+            except Exception:
+                pass
 
         set_artifact_download_urls(manifest)
         manifest.testcase = {
@@ -1046,11 +1091,27 @@ async def _run_testcase_step(manifest: SubmissionManifest) -> None:
             "total": result.total,
             "passed": result.passed,
             "failed": result.failed,
+            "case_results": result.case_results,
             "artifacts": testcase_artifacts,
+            "artifact_urls": testcase_urls,
+            "artifact_source": "r2" if testcase_urls else "local",
+            "log_url": testcase_urls.get("log.html"),
+            "output_url": testcase_urls.get("output.xml"),
+            "report_url": testcase_urls.get("report.html"),
         }
 
         if result.status == "error":
             _set_step_finished(manifest, "testcase", "error", error=result.output[-500:])
+        elif result.status == "failed":
+            _set_step_finished(
+                manifest,
+                "testcase",
+                "error",
+                error=f"{result.failed} testcase(s) failed",
+                testcase_status=result.status,
+                passed=result.passed,
+                failed=result.failed,
+            )
         else:
             _set_step_finished(
                 manifest,
@@ -1132,10 +1193,53 @@ async def _run_r2_upload_step(manifest: SubmissionManifest) -> None:
             key = f"submissions/{submission_id}/scan.json"
             _, url = r2_upload_file(key, scan_file.read_bytes(), content_type="application/json")
             r2_results["cyber_scan"] = url
+            if manifest.cyber.get("status") == "success":
+                local_download_url = manifest.cyber.get("download_url")
+                manifest.cyber["download_url"] = url
+                manifest.cyber["download_source"] = "r2"
+                manifest.cyber["fallback_download_url"] = local_download_url
         except Exception as exc:
             r2_results["cyber_scan_error"] = str(exc)
 
+    # 4. Upload testcase artifacts so test results can load/download from R2.
+    testcase_dir = get_submission_root(submission_id) / "artifacts" / "testcase"
+    testcase_urls: dict[str, str] = {}
+    if testcase_dir.exists():
+        for filename, content_type in (
+            ("test_suite.robot", "text/plain"),
+            ("report.html", "text/html"),
+            ("log.html", "text/html"),
+            ("output.xml", "application/xml"),
+        ):
+            artifact_path = testcase_dir / filename
+            if not artifact_path.exists():
+                continue
+            try:
+                key = f"submissions/{submission_id}/testcase/{filename}"
+                _, url = r2_upload_file(key, artifact_path.read_bytes(), content_type=content_type)
+                testcase_urls[filename] = url
+            except Exception as exc:
+                r2_results[f"testcase_{filename}_error"] = str(exc)
+
+    if testcase_urls and isinstance(manifest.testcase, dict):
+        artifact_urls = manifest.testcase.get("artifact_urls")
+        if not isinstance(artifact_urls, dict):
+            artifact_urls = {}
+        artifact_urls.update(testcase_urls)
+        manifest.testcase["artifact_urls"] = artifact_urls
+        manifest.testcase["artifact_source"] = "r2"
+        if "log.html" in testcase_urls:
+            manifest.testcase["log_url"] = testcase_urls["log.html"]
+        if "output.xml" in testcase_urls:
+            manifest.testcase["output_url"] = testcase_urls["output.xml"]
+        if "report.html" in testcase_urls:
+            manifest.testcase["report_url"] = testcase_urls["report.html"]
+
     manifest.r2_artifacts = r2_results
+    if manifest.cyber:
+        _persist_project_results(manifest.project_db_id, cybersecurity_result=manifest.cyber)
+    if manifest.testcase:
+        _persist_project_results(manifest.project_db_id, testcase_result=manifest.testcase)
     write_manifest(manifest)
 
 

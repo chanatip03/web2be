@@ -18,8 +18,11 @@ def get_current_user(
 
     try:
         payload = decode_token(token)
-        user_id = payload.get("userId")
+        user_id = payload.get("userId") or payload.get("sub")
         user_role = payload.get("role")
+
+        if not user_role and payload.get("type") == "admin":
+            user_role = "admin"
 
         if not user_id or not user_role:
             raise HTTPException(status_code=401, detail="Invalid token")
@@ -40,6 +43,11 @@ def get_current_user(
 
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+
+    if user_role == "teacher":
+        teacher = getattr(user, "teacher", None)
+        if not teacher or not bool(teacher.is_approved):
+            raise HTTPException(status_code=403, detail="Teacher account is pending admin approval")
 
     return {
     "id": user.id,

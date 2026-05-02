@@ -2,10 +2,12 @@ from typing import List, Optional
 from fastapi import BackgroundTasks
 from sqlalchemy.orm import Session
 from .repository import get_project_by_id, get_projects_by_assignment_id, update_project_grading_repo
+from .dto import ProjectResponse
 from app.core.assignment.repository import get_assignment_by_id
 from app.core.classroom.repository import is_classroom_of_teacher
 from app.core.user.repository import get_teacher_by_user_id
-from app.utils.otp import send_grading_email
+from app.core.submission.fs import find_latest_manifest_for_project
+from app.utils.otp import send_grading_discord, send_grading_email
 from app.models.schema import Project, SubmissionTypeEnum
 import io
 import re
@@ -158,19 +160,41 @@ def get_project_source_code_service(db: Session, current_user: dict, project_id:
     }
 
 
-def get_project_service(db: Session, current_user: dict, project_id: int) -> Project:
+def _to_project_response(project: Project) -> ProjectResponse:
+    manifest = find_latest_manifest_for_project(project.id)
+    return ProjectResponse.model_validate({
+        "id": project.id,
+        "assignment_id": project.assignment_id,
+        "student_id": project.student_id,
+        "group_id": project.group_id,
+        "submission_type": project.submission_type,
+        "submission_uuid": project.submission_uuid,
+        "project_source_url": project.project_source_url,
+        "env": project.env,
+        "testcase_result": project.testcase_result,
+        "cybersecurity_result": project.cybersecurity_result,
+        "score": project.score,
+        "feedback": project.feedback,
+        "is_late": project.is_late,
+        "created_date": project.created_date,
+        "submission_id": manifest.submission_id if manifest else None,
+        "students": list(project.students),
+    })
+
+
+def get_project_service(db: Session, current_user: dict, project_id: int) -> ProjectResponse:
     project = get_project_by_id(db, project_id)
     if not project:
         raise ValueError("Project not found")
-    return project
+    return _to_project_response(project)
 
-def get_projects_by_assignment_service(db: Session, current_user: dict, assignment_id: int) -> List[Project]:
+def get_projects_by_assignment_service(db: Session, current_user: dict, assignment_id: int) -> List[ProjectResponse]:
     assignment = get_assignment_by_id(db, assignment_id)
     if not assignment:
         raise ValueError("Assignment not found")
-    return get_projects_by_assignment_id(db, assignment_id)
+    return [_to_project_response(project) for project in get_projects_by_assignment_id(db, assignment_id)]
 
-def update_project_grading_service(db: Session, current_user: dict, project_id: int, background_tasks: BackgroundTasks, score: Optional[int] = None, feedback: Optional[str] = None) -> Project:
+def update_project_grading_service(db: Session, current_user: dict, project_id: int, background_tasks: BackgroundTasks, score: Optional[int] = None, feedback: Optional[str] = None) -> ProjectResponse:
     if current_user.get("role") not in ["teacher", "admin"]:
         raise ValueError("Only teachers and admins can grade projects")
 
@@ -178,8 +202,8 @@ def update_project_grading_service(db: Session, current_user: dict, project_id: 
     if not project:
         raise ValueError("Project not found")
 
-    assignment_id = None
-    if project.group_id and project.group:
+    assignment_id = project.assignment_id
+    if not assignment_id and project.group_id and project.group:
         assignment_id = project.group.assignment_id
 
     if current_user.get("role") == "teacher":
@@ -200,13 +224,30 @@ def update_project_grading_service(db: Session, current_user: dict, project_id: 
         assignment = get_assignment_by_id(db, assignment_id)
         if assignment:
             assignment_name = assignment.title
-            target_emails = set()
+            notification_targets = set()
             if project.group_id and project.group:
                 for member in project.group.members:
                     if member.student and member.student.user:
-                        target_emails.add(member.student.user.email)
-            
-            for email in target_emails:
-                background_tasks.add_task(send_grading_email, to_email=email, assignment_name=assignment_name)
+                        notification_targets.add((member.student.user.email, member.student.discord_user_id))
+            elif project.student and project.student.user:
+                notification_targets.add((project.student.user.email, project.student.discord_user_id))
 
-    return project
+            for email, discord_user_id in notification_targets:
+                if email:
+                    background_tasks.add_task(
+                        send_grading_email,
+                        to_email=email,
+                        assignment_name=assignment_name,
+                        score=score,
+                        feedback=feedback,
+                    )
+                if discord_user_id:
+                    background_tasks.add_task(
+                        send_grading_discord,
+                        discord_user_id=discord_user_id,
+                        assignment_name=assignment_name,
+                        score=score,
+                        feedback=feedback,
+                    )
+
+    return _to_project_response(project)

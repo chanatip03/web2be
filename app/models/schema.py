@@ -79,6 +79,7 @@ class Student(Base):
     classrooms = relationship("ClassroomMember", back_populates="student")
     group_members = relationship("GroupMember", back_populates="student")
     projects = relationship("Project", back_populates="student")
+    submission_of = relationship("SubmissionOf", back_populates="student")
 
 class Teacher(Base):
     __tablename__ = "teachers"
@@ -228,6 +229,7 @@ class Project(Base):
     group = relationship("Group", back_populates="projects")
     student = relationship("Student", back_populates="projects")
     assignment = relationship("Assignment", back_populates="projects")
+    submission_of = relationship("SubmissionOf", back_populates="project")
 
     @property
     def group_name(self):
@@ -276,3 +278,22 @@ class GroupMember(Base):
     __table_args__ = (
         UniqueConstraint("group_id", "student_id", name="uq_group_student"),
     )
+    
+class SubmissionOf(Base):
+    __tablename__ = "submission_of"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
+    assignment_id = Column(Integer, ForeignKey("assignments.id", ondelete="CASCADE"), nullable=False)
+
+    created_date = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "student_id", name="uq_project_student"),
+    )
+    
+    project = relationship("Project", back_populates="submission_of")
+    student = relationship("Student", back_populates="submission_of")
+    assignment = relationship("Assignment")

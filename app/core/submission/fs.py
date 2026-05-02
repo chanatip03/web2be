@@ -7,8 +7,9 @@ import shutil
 import time
 import uuid
 import zipfile
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 from .manifest import ArtifactRecord, SubmissionManifest, touch_manifest
 
@@ -81,9 +82,50 @@ def write_manifest(manifest: SubmissionManifest) -> Path:
 
 def read_manifest(submission_id: str) -> SubmissionManifest:
     path = get_manifest_path(submission_id)
-    if not path.exists():
-        raise FileNotFoundError(f"Submission manifest not found: {submission_id}")
-    return SubmissionManifest.model_validate_json(path.read_text(encoding="utf-8"))
+    last_error: Exception | None = None
+    for _ in range(20):
+        try:
+            if not path.exists():
+                raise FileNotFoundError(f"Submission manifest not found: {submission_id}")
+            return SubmissionManifest.model_validate_json(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
+            last_error = exc
+            time.sleep(0.1)
+
+    if last_error is not None:
+        raise last_error
+    raise FileNotFoundError(f"Submission manifest not found: {submission_id}")
+
+
+def iter_submission_manifests() -> Iterator[SubmissionManifest]:
+    base_dir = get_submission_base_dir()
+    for manifest_path in base_dir.glob("*/manifest.json"):
+        try:
+            yield SubmissionManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+
+def find_latest_manifest_for_project(project_id: int) -> Optional[SubmissionManifest]:
+    latest_manifest: Optional[SubmissionManifest] = None
+    latest_key: tuple[float, str] | None = None
+
+    for manifest in iter_submission_manifests():
+        if manifest.project_db_id != project_id:
+            continue
+
+        updated_at = manifest.updated_at or manifest.created_at or ""
+        try:
+            timestamp = datetime.fromisoformat(updated_at.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            timestamp = 0.0
+
+        current_key = (timestamp, manifest.submission_id)
+        if latest_key is None or current_key > latest_key:
+            latest_key = current_key
+            latest_manifest = manifest
+
+    return latest_manifest
 
 
 def save_uploaded_archive(submission_id: str, filename: str, contents: bytes) -> Path:

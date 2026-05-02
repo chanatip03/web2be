@@ -23,31 +23,16 @@ from app.deployment.services.docker.client import docker_client
 router = APIRouter(prefix="/api", tags=["Deployments"])
 
 
-def _ensure_backend_env_mount(compose_file_path: str) -> None:
-    """Ensure compose backend service has an `.env` file available.
-
-    Some backends (notably Go apps using godotenv) crash if `.env` is missing.
-    For compose deployments we mount `./.env.deployer` into `/app/.env`.
-
-    This is a best-effort retrofit for older generated compose files.
-    """
+def _sanitize_backend_env_mount(compose_file_path: str) -> None:
     try:
         compose_path = Path(compose_file_path)
-        compose_dir = compose_path.parent
-
-        env_path = compose_dir / ".env.deployer"
-        if not env_path.exists():
-            env_path.write_text("", encoding="utf-8")
-
         if not compose_path.exists():
             return
 
         content = compose_path.read_text(encoding="utf-8", errors="replace")
         mount_line = '      - "./.env.deployer:/app/.env:ro"'
-        mount_present = mount_line in content
 
         lines = content.splitlines()
-        # Locate the backend service block
         try:
             backend_idx = next(i for i, ln in enumerate(lines) if ln.strip() == "backend:" and ln.startswith("  "))
         except StopIteration:
@@ -61,68 +46,37 @@ def _ensure_backend_env_mount(compose_file_path: str) -> None:
                     break
             return end
 
-        # Find end of backend service (next top-level service or end)
         end_idx = _find_backend_end(lines)
 
-        # Infer backend container port from the first ports mapping, e.g. "50765:8080".
-        backend_container_port: str | None = None
-        for i in range(backend_idx + 1, end_idx):
-            ln = lines[i].strip()
-            if ln.startswith('-') and '"' in ln and ':' in ln:
-                # Extract the last colon-separated segment inside quotes.
-                try:
-                    quoted = ln.split('"', 2)[1]
-                    backend_container_port = quoted.split(':')[-1].split('/')[0]
-                except Exception:
-                    backend_container_port = None
-                break
+        filtered_backend_block = [lines[backend_idx]]
+        for line in lines[backend_idx + 1 : end_idx]:
+            if line == mount_line:
+                continue
+            filtered_backend_block.append(line)
 
-        # If volumes already exist in backend block, just append our mount if missing.
-        volumes_idx = None
-        for i in range(backend_idx + 1, end_idx):
-            if lines[i].strip() == "volumes:" and lines[i].startswith("    "):
-                volumes_idx = i
-                break
+        cleaned_backend_block: list[str] = []
+        skip_volumes_header = False
+        for index, line in enumerate(filtered_backend_block):
+            if line.strip() != "volumes:" or not line.startswith("    "):
+                cleaned_backend_block.append(line)
+                continue
 
-        if not mount_present:
-            if volumes_idx is not None:
-                insert_at = volumes_idx + 1
-                lines.insert(insert_at, mount_line)
-            else:
-                # Insert volumes after the ports block if present, otherwise near the top.
-                insert_at = backend_idx + 1
-                ports_idx = None
-                for i in range(backend_idx + 1, end_idx):
-                    if lines[i].strip() == "ports:" and lines[i].startswith("    "):
-                        ports_idx = i
-                        break
-                if ports_idx is not None:
-                    insert_at = ports_idx + 1
-                    # After any existing port mappings
-                    while insert_at < end_idx and lines[insert_at].lstrip().startswith("-"):
-                        insert_at += 1
-                lines[insert_at:insert_at] = ["    volumes:", mount_line]
+            next_line = filtered_backend_block[index + 1] if index + 1 < len(filtered_backend_block) else None
+            if next_line is None or not next_line.startswith("      - "):
+                skip_volumes_header = True
+                continue
 
-        # Recompute backend end index after insertions.
-        end_idx = _find_backend_end(lines)
+            cleaned_backend_block.append(line)
 
-        # Ensure PORT env matches the container port mapping (if we could infer it).
-        if backend_container_port:
-            env_idx = None
-            for i in range(backend_idx + 1, end_idx):
-                if lines[i].strip() == "environment:" and lines[i].startswith("    "):
-                    env_idx = i
-                    break
+        if skip_volumes_header and cleaned_backend_block and cleaned_backend_block[-1].strip() == "volumes:":
+            cleaned_backend_block.pop()
 
-            if env_idx is not None:
-                has_port = any(
-                    ln.startswith("      PORT:") or ln.startswith("      PORT ")
-                    for ln in lines[env_idx + 1 : end_idx]
-                )
-                if not has_port:
-                    lines.insert(env_idx + 1, f'      PORT: "{backend_container_port}"')
+        new_lines = lines[:backend_idx] + cleaned_backend_block + lines[end_idx:]
 
-        compose_path.write_text("\n".join(lines) + ("\n" if content.endswith("\n") else ""), encoding="utf-8")
+        if new_lines == lines:
+            return
+
+        compose_path.write_text("\n".join(new_lines) + ("\n" if content.endswith("\n") else ""), encoding="utf-8")
     except Exception:
         return
 
@@ -340,8 +294,8 @@ async def start_deployment(deployment_id: str):
         try:
             compose_dir = str(Path(deployment.compose_file_path).parent)
 
-            # Best-effort: ensure older compose files mount `.env.deployer` into `/app/.env`.
-            _ensure_backend_env_mount(deployment.compose_file_path)
+            # Remove legacy env bind mounts that are invalid when compose runs in the scanner container.
+            _sanitize_backend_env_mount(deployment.compose_file_path)
 
             # Best-effort: load saved images first (so compose won't need to build)
             project_dir = Path(settings.projects_dir) / deployment.project_id
