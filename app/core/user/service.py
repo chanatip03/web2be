@@ -1,11 +1,11 @@
 from typing import Optional
 from sqlalchemy.orm import Session
-from app.utils.generate_token import hash_password
+from app.utils.generate_token import hash_password, verify_password
 from app.models.schema import User
 from .repository import (
     create_user, create_student_profile, create_teacher_profile,
     get_users_by_role, get_user_with_student, get_user_with_teacher,
-    get_user_by_id, soft_delete_user, update_student_data, update_teacher_data
+    get_user_by_id, soft_delete_user, update_student_data, update_teacher_data, update_password_by_email, update_password_by_user_id
 )
 
 
@@ -92,3 +92,47 @@ def soft_delete_user_service(db: Session, current_user: dict, user_id: int):
         raise ValueError("User not found")
     soft_delete_user(db, user)
     return True
+
+def update_user_password_service(
+    db: Session,
+    email: str,
+    new_password: str
+):
+    hashed = hash_password(new_password)
+
+    user = update_password_by_email(
+        db=db,
+        email=email,
+        password=hashed
+    )
+
+    if not user:
+        raise ValueError("User not found")
+
+    return True
+
+
+def change_user_password_service(
+    db: Session,
+    user_id: int,
+    old_password: str,
+    new_password: str
+):
+    user = get_user_by_id(db, user_id)
+
+    if not user:
+        raise ValueError(status_code=404, detail="User not found")
+
+
+    if not verify_password(old_password, user.password):
+        raise ValueError("Old password incorrect")
+
+    hashed = hash_password(new_password)
+
+    updated_user = update_password_by_user_id(
+        db=db,
+        user_id=user_id,
+        hashed_password=hashed
+    )
+
+    return updated_user

@@ -169,3 +169,10 @@ class UpdateTeacherRequest:
         )
 
 
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    new_password: str

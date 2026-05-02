@@ -53,6 +53,8 @@ class RegisterRequest(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
 
 # Keep backward-compat alias
 register_request = RegisterRequest
