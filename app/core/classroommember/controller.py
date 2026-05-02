@@ -36,7 +36,7 @@ def join_classroom_endpoint(
             detail=f"Failed to join classroom: {str(e)}"
         )
     
-@router.get("/{classroom_id}", response_model=list[ClassroomMemberResponse])
+@router.get("/{classroom_id}", response_model=list[ClassroomMemberResponse] or [])
 def get_classroom_member(
     classroom_id: int,
     db: Annotated[Session, Depends(get_db)],

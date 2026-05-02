@@ -40,10 +40,7 @@ def join_classroom_by_code(db: Session, user_id: int, code: str):
 
 def get_classroom_member_service(db: Session, classroom_id: int):
     member = get_classroon_member(db, classroom_id)
-    if not member:
-        raise ValueError("Classroom member not found")
-
-    return member
+    return member or []
 
 def delete_classroom_member_service(db: Session, classroom_id: int, student_id: int,current_user):
     if current_user["role"] != "teacher":
