@@ -1,5 +1,6 @@
 from typing import List, Optional
 from sqlalchemy.orm import Session
+from sqlalchemy import or_, and_
 from app.models.schema import Project, Group
 
 def get_project_by_id(db: Session, project_id: int) -> Optional[Project]:
