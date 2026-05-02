@@ -160,31 +160,31 @@ def get_project_source_code_service(db: Session, current_user: dict, project_id:
     }
 
 
-# def _to_project_response(project: Project) -> ProjectResponse:
-#     manifest = find_latest_manifest_for_project(project.id)
-#     return ProjectResponse.model_validate({
-#         "id": project.id,
-#         "assignment_id": project.assignment_id,
-#         "student_id": project.student_id,
-#         "group_id": project.group_id,
-#         "submission_type": project.submission_type,
-#         "submission_uuid": project.submission_uuid,
-#         "project_source_url": project.project_source_url,
-#         "env": project.env,
-#         "testcase_result": project.testcase_result,
-#         "cybersecurity_result": project.cybersecurity_result,
-#         "score": project.score,
-#         "feedback": project.feedback,
-#         "is_late": project.is_late,
-#         "created_date": project.created_date,
-#         "submission_id": manifest.submission_id if manifest else None,
-#         "students": list(project.students),
-#     })
+def _to_project_response(project: Project) -> ProjectResponse:
+    manifest = find_latest_manifest_for_project(project.id)
+    return ProjectResponse.model_validate({
+        "id": project.id,
+        "assignment_id": project.assignment_id,
+        "student_id": project.student_id,
+        "group_id": project.group_id,
+        "submission_type": project.submission_type,
+        "submission_uuid": project.submission_uuid,
+        "project_source_url": project.project_source_url,
+        "env": project.env,
+        "testcase_result": project.testcase_result,
+        "cybersecurity_result": project.cybersecurity_result,
+        "score": project.score,
+        "feedback": project.feedback,
+        "is_late": project.is_late,
+        "created_date": project.created_date,
+        "submission_id": manifest.submission_id if manifest else None,
+        "students": list(project.students),
+    })
 
 
 def get_project_service(db: Session, current_user: dict, project_id: int) -> ProjectResponse:
     project = get_project_by_id(db, project_id)
-    return project or []
+    return _to_project_response(project) or []
 
 def get_projects_by_assignment_service(db: Session, current_user: dict, assignment_id: int) -> List[ProjectResponse]:
     assignment = get_assignment_by_id(db, assignment_id)
@@ -192,7 +192,7 @@ def get_projects_by_assignment_service(db: Session, current_user: dict, assignme
         raise ValueError("Assignment not found")
     projects = get_projects_by_assignment_id(db, assignment_id)
 
-    return [p for p in projects]
+    return [_to_project_response(p) for p in projects] 
 
 def update_project_grading_service(db: Session, current_user: dict, project_id: int, background_tasks: BackgroundTasks, score: Optional[int] = None, feedback: Optional[str] = None) -> ProjectResponse:
     if current_user.get("role") not in ["teacher", "admin"]:
@@ -250,4 +250,4 @@ def update_project_grading_service(db: Session, current_user: dict, project_id: 
                         feedback=feedback,
                     )
 
-    return project
+    return _to_project_response(project)
