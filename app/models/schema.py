@@ -79,6 +79,7 @@ class Student(Base):
     classrooms = relationship("ClassroomMember", back_populates="student")
     group_members = relationship("GroupMember", back_populates="student")
     projects = relationship("Project", back_populates="student")
+    submission_of = relationship("SubmissionOf", back_populates="student")
 
 class Teacher(Base):
     __tablename__ = "teachers"
@@ -228,6 +229,7 @@ class Project(Base):
     group = relationship("Group", back_populates="projects")
     student = relationship("Student", back_populates="projects")
     assignment = relationship("Assignment", back_populates="projects")
+    submission_of = relationship("SubmissionOf", back_populates="project")
 
     @property
     def group_name(self):

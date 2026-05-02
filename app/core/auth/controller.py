@@ -62,6 +62,14 @@ def login(data: LoginRequest, response: Response, db: Session = Depends(get_db))
     role_name = user.role.name.value if hasattr(user.role.name, "value") else str(user.role.name)
     role_name = role_name.lower()
 
+    if role_name == "teacher":
+        teacher = getattr(user, "teacher", None)
+        if not teacher or not bool(teacher.is_approved):
+            raise HTTPException(
+                status_code=403,
+                detail="Teacher account is pending admin approval",
+            )
+
     token = create_access_token({"userId": str(user.id), "role": role_name})
     _set_token_cookie(response, token)
     return {"access_token": token}

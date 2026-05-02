@@ -63,9 +63,13 @@ async def create_assignment(
         # ── Auto-generate Robot Framework testcase from title + description ──
         if not testcase_url:
             try:
-                prompt = f"Title: {data.title}"
+                prompt = f"Assignment title: {data.title}"
                 if data.description:
-                    prompt += f"\nDescription: {data.description}"
+                    prompt += f"\nAssignment description: {data.description}"
+                prompt += (
+                    "\nGeneration request: Create Robot Framework testcases that specifically validate "
+                    "this assignment's required behavior and important edge cases."
+                )
                 context_id = f"assignment-{assignment.id}"
                 suite_content = await generate_robot_suite_content(
                     context_id=context_id,

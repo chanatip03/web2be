@@ -57,8 +57,7 @@ def get_student_users(db: Session, search: str | None = None):
                 s.student_id
             FROM users u
             JOIN students s ON s.user_id = u.id
-            JOIN role_users ru ON ru.user_id = u.id
-            JOIN roles r ON r.id = ru.role_id
+            JOIN roles r ON r.id = u.role_id
             WHERE r.name = 'student'
               AND u.deleted_date IS NULL
               AND s.deleted_date IS NULL
@@ -113,8 +112,7 @@ def get_teacher_users(db: Session, search: str | None = None, *, approved_only: 
                 COALESCE(t.is_approved, FALSE) AS is_approved
             FROM users u
             JOIN teachers t ON t.user_id = u.id
-            JOIN role_users ru ON ru.user_id = u.id
-            JOIN roles r ON r.id = ru.role_id
+            JOIN roles r ON r.id = u.role_id
             WHERE r.name = 'teacher'
               AND u.deleted_date IS NULL
               AND t.deleted_date IS NULL

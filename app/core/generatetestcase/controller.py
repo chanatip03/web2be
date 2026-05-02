@@ -33,6 +33,7 @@ test_definition_store: JsonStore[TestDefinition] = JsonStore(
 class TestDefinitionCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     prompt: str
+    project_type: Optional[str] = None
     assignment_title: Optional[str] = None
     assignment_description: Optional[str] = None
 
@@ -48,10 +49,14 @@ class TestRunRequest(BaseModel):
 
 def _build_effective_prompt(
     prompt: str,
+    project_type: Optional[str] = None,
     assignment_title: Optional[str] = None,
     assignment_description: Optional[str] = None,
 ) -> str:
     parts: list[str] = []
+
+    if project_type:
+        parts.append(f"Assignment project type: {project_type}")
 
     if assignment_title:
         parts.append(f"Assignment title: {assignment_title}")
@@ -59,6 +64,11 @@ def _build_effective_prompt(
     if assignment_description:
         parts.append(f"Assignment description: {assignment_description}")
 
+    parts.append(
+        "Generation rule: The testcase must be specific to the assignment context above. "
+        "Use the assignment title and description as the source of truth for required behavior, "
+        "important scenarios, and edge cases."
+    )
     parts.append(f"Generation request: {prompt}")
 
     return "\n".join(parts)
@@ -83,12 +93,13 @@ def _save_definition_robot_file(test_id: str, suite_content: str) -> str:
 @router.post("/definitions/generate")
 async def create_test_definition(body: TestDefinitionCreateRequest):
     """Create a reusable test definition from prompt (test_id-first)."""
-    project_type = "unknown"
+    project_type = (body.project_type or "unknown").strip().lower()
     tech_stack = []
     preview_url = ""
 
     effective_prompt = _build_effective_prompt(
         body.prompt,
+        body.project_type,
         body.assignment_title,
         body.assignment_description,
     )
