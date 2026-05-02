@@ -16,6 +16,7 @@ from .service import (
 
 router = APIRouter(prefix="/project", tags=["Project"])
 
+@router.get("", response_model=List[ProjectResponse])
 @router.get("/", response_model=List[ProjectResponse])
 def get_all_projects_endpoint(
     db: Session = Depends(get_db),

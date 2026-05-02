@@ -184,9 +184,7 @@ def _to_project_response(project: Project) -> ProjectResponse:
 
 def get_project_service(db: Session, current_user: dict, project_id: int) -> ProjectResponse:
     project = get_project_by_id(db, project_id)
-    if not project:
-        raise ValueError("Project not found")
-    return _to_project_response(project)
+    return _to_project_response(project) or []
 
 def get_projects_by_assignment_service(db: Session, current_user: dict, assignment_id: int) -> List[ProjectResponse]:
     assignment = get_assignment_by_id(db, assignment_id)
