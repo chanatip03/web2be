@@ -6,14 +6,16 @@ def get_project_by_id(db: Session, project_id: int) -> Optional[Project]:
     return db.query(Project).filter(Project.id == project_id).first()
 
 def get_projects_by_assignment_id(db: Session, assignment_id: int) -> List[Project]:
-    from sqlalchemy import or_
     return (
         db.query(Project)
         .outerjoin(Group, Project.group_id == Group.id)
         .filter(
             or_(
-                Group.assignment_id == assignment_id,       # group submissions
-                Project.assignment_id == assignment_id,     # individual submissions
+                Project.assignment_id == assignment_id,
+                and_(
+                    Project.group_id.isnot(None),
+                    Group.assignment_id == assignment_id
+                )
             )
         )
         .all()
