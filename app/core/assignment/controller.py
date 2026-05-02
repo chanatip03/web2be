@@ -98,7 +98,7 @@ async def create_assignment(
             detail=f"Failed to create assignment: {str(e)}"
         )
 
-@router.get("/", response_model=List[AssignmentResponse])
+@router.get("/{classroom_id}", response_model=List[AssignmentResponse])
 def get_assignments(
     classroom_id: int,
     db: Annotated[Session, Depends(get_db)],
