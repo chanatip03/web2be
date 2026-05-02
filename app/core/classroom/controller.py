@@ -18,6 +18,7 @@ from .service import (
 
 router = APIRouter(prefix="/classroom", tags=["Classroom"])
 
+@router.post("", response_model=ClassroomResponse)
 @router.post("/", response_model=ClassroomResponse)
 def create_classroom_endpoint(
     data: CreateClassroomRequest,
@@ -38,6 +39,7 @@ def create_classroom_endpoint(
             detail=f"Failed to create classroom: {str(e)}"
         )
 
+@router.get("", response_model=list[ClassroomResponse])
 @router.get("/", response_model=list[ClassroomResponse])
 def get_classrooms_endpoint(
     db: Annotated[Session, Depends(get_db)],
