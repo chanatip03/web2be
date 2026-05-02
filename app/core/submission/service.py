@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 from fastapi import BackgroundTasks, HTTPException, UploadFile, status
@@ -208,6 +209,19 @@ def _submission_source_name(source_ref: str | None, source_type: str) -> str:
     if source_ref:
         return source_ref.rstrip("/").split("/")[-1] or "submission"
     return "submission"
+
+
+def _resolve_test_runner_preview_url(preview_url: str) -> str:
+    parsed = urlparse(preview_url)
+    if parsed.hostname not in {"localhost", "127.0.0.1"}:
+        return preview_url
+
+    host = "host.docker.internal"
+    if parsed.port:
+        netloc = f"{host}:{parsed.port}"
+    else:
+        netloc = host
+    return urlunparse(parsed._replace(netloc=netloc))
 
 
 def _command_exists(command: str) -> bool:
@@ -648,12 +662,17 @@ def _teardown_deployment_containers(submission_id: str) -> None:
     # pipeline has finished (and artifacts have been uploaded to R2), they
     # can be safely removed to free disk space.
 
-    # 3a. data/submissions/<uuid>  (source code, artifacts, manifest)
+    # 3a. data/submissions/<uuid>
+    # Keep manifest + artifacts for status polling and downloads after the
+    # pipeline completes; remove only large transient inputs/workspace.
     try:
         sub_root = get_submission_root(submission_id)
         if sub_root.exists():
-            shutil.rmtree(sub_root, ignore_errors=True)
-            logger.info("Deleted submission working dir: %s", sub_root)
+            for transient_name in ("original", "source"):
+                transient_path = sub_root / transient_name
+                if transient_path.exists():
+                    shutil.rmtree(transient_path, ignore_errors=True)
+                    logger.info("Deleted submission transient dir: %s", transient_path)
     except Exception as exc:
         logger.warning("Failed to delete submission dir for %s: %s", submission_id, exc)
 
@@ -1008,7 +1027,8 @@ async def _run_testcase_step(manifest: SubmissionManifest) -> None:
 
     try:
         suite_content = await _load_testcase_suite_content(manifest.testcase_source_url)
-        suite_content = suite_content.replace("http://localhost:3000", preview_url.rstrip("/"))
+        testcase_base_url = _resolve_test_runner_preview_url(preview_url.rstrip("/"))
+        suite_content = suite_content.replace("http://localhost:3000", testcase_base_url)
 
         suite_dir = get_submission_root(manifest.submission_id) / "artifacts" / "testcase"
         suite_dir.mkdir(parents=True, exist_ok=True)
@@ -1082,6 +1102,16 @@ async def _run_testcase_step(manifest: SubmissionManifest) -> None:
 
         if result.status == "error":
             _set_step_finished(manifest, "testcase", "error", error=result.output[-500:])
+        elif result.status == "failed":
+            _set_step_finished(
+                manifest,
+                "testcase",
+                "error",
+                error=f"{result.failed} testcase(s) failed",
+                testcase_status=result.status,
+                passed=result.passed,
+                failed=result.failed,
+            )
         else:
             _set_step_finished(
                 manifest,

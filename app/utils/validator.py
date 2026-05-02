@@ -44,6 +44,11 @@ def get_current_user(
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
 
+    if user_role == "teacher":
+        teacher = getattr(user, "teacher", None)
+        if not teacher or not bool(teacher.is_approved):
+            raise HTTPException(status_code=403, detail="Teacher account is pending admin approval")
+
     return {
     "id": user.id,
     "role": user_role

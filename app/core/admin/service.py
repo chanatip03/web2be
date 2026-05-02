@@ -66,7 +66,7 @@ def get_admin_students(db: Session, current_user: dict, search: str | None = Non
 
 def get_admin_teachers(db: Session, current_user: dict, search: str | None = None) -> list[AdminTeacherRow]:
     _ensure_admin(current_user)
-    users = repository.get_teacher_users(db, search, approved_only=True)
+    users = repository.get_teacher_users(db, search, approved_only=None)
     return [
         AdminTeacherRow(
             id=user.id,
