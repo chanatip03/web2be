@@ -190,7 +190,7 @@ def get_projects_by_assignment_service(db: Session, current_user: dict, assignme
     assignment = get_assignment_by_id(db, assignment_id)
     if not assignment:
         raise ValueError("Assignment not found")
-    return [_to_project_response(project) for project in get_projects_by_assignment_id(db, assignment_id)]
+    return [_to_project_response(project) for project in get_projects_by_assignment_id(db, assignment_id)] or []
 
 def update_project_grading_service(db: Session, current_user: dict, project_id: int, background_tasks: BackgroundTasks, score: Optional[int] = None, feedback: Optional[str] = None) -> ProjectResponse:
     if current_user.get("role") not in ["teacher", "admin"]:
