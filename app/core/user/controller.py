@@ -18,6 +18,7 @@ from app.utils.otp import (
 
 router = APIRouter(prefix="/user", tags=["User"])
 
+@router.get("", response_model=List[UserResponse])
 @router.get("/", response_model=List[UserResponse])
 def get_users_endpoint(role: Optional[str] = None, db: Session = Depends(get_db)):
     try:

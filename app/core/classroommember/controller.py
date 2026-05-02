@@ -15,6 +15,7 @@ from .service import (
 
 router = APIRouter(prefix="/classroommember", tags=["ClassroomMember"])
 
+@router.post("", response_model=ClassroomMemberResponse)
 @router.post("/", response_model=ClassroomMemberResponse)
 def join_classroom_endpoint(
     code: str,
