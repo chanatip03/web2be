@@ -79,7 +79,6 @@ class Student(Base):
     classrooms = relationship("ClassroomMember", back_populates="student")
     group_members = relationship("GroupMember", back_populates="student")
     projects = relationship("Project", back_populates="student")
-    submission_of = relationship("SubmissionOf", back_populates="student")
 
 class Teacher(Base):
     __tablename__ = "teachers"
