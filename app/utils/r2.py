@@ -66,6 +66,18 @@ def get_file_bytes(key: str) -> bytes:
         return obj["Body"].read()
     except (BotoCoreError, ClientError) as e:
         raise RuntimeError(f"R2 get object failed: {e}")
+
+def download_file_to_disk(key: str, dest_path: str) -> None:
+    """Download a file from R2 directly to disk. This is safer for large files than reading into memory."""
+    client = _get_s3_client()
+    key = key.lstrip('/')
+    try:
+        import os
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        # Using download_file handles multipart downloads and retries automatically
+        client.download_file(R2_BUCKET, key, dest_path)
+    except (BotoCoreError, ClientError) as e:
+        raise RuntimeError(f"R2 download file failed: {e}")
     
 def delete_file(url: str) -> bool:
     client = _get_s3_client()

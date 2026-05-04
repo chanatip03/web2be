@@ -120,10 +120,9 @@ def _download_bundle(submission_id: str, target_path: Path) -> None:
     """Download .tar.gz bundle from R2 to target_path."""
     key = _r2_bundle_key(submission_id)
     logger.info("Downloading bundle from R2: %s", key)
-    data = get_file_bytes(key)
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    target_path.write_bytes(data)
-    logger.info("Bundle downloaded: %d bytes → %s", len(data), target_path)
+    from app.utils.r2 import download_file_to_disk
+    download_file_to_disk(key, str(target_path))
+    logger.info("Bundle downloaded to %s", target_path)
 
 
 def _teardown(submission_id: str) -> None:
@@ -218,49 +217,16 @@ def _launch_bundle(submission_id: str) -> PreviewSession:
                 from urllib.parse import urlparse as _urlparse
                 base = (settings.public_base_url or "http://localhost").rstrip("/")
                 _p = _urlparse(base)
+                # If using HTTPS (like ngrok), direct ports won't work, so we rely on proxy.
+                if _p.scheme == "https" or "ngrok" in _p.hostname:
+                    continue
+                    
                 candidate = f"{_p.scheme}://{_p.hostname}:{host_port}"
                 if sp.get("service") == "frontend":
                     direct_url = candidate
                     break
                 if direct_url is None:
                     direct_url = candidate  # use first available as fallback
-
-        # Probe and auto-resolve entrypoint for directory listings
-        if direct_url:
-            import httpx
-            import time
-            import re
-            
-            # Wait a brief moment for the container's web server to boot
-            time.sleep(1.0)
-            
-            for _ in range(3):
-                try:
-                    resp = httpx.get(direct_url, timeout=2.0)
-                    if resp.status_code == 200:
-                        text = resp.text.lower()
-                        # Check if it's a directory listing (e.g. from http-server or nginx)
-                        if "index of" in text or "directory listing" in text:
-                            html_files = re.findall(r'href=["\']([^"\']+\.html?)["\']', resp.text)
-                            if html_files:
-                                priorities = ["index.html", "landing.html", "home.html", "login.html", "main.html", "shop.html"]
-                                resolved = False
-                                for p in priorities:
-                                    if any(f.endswith(p) for f in html_files):
-                                        direct_url = f"{direct_url.rstrip('/')}/{p}"
-                                        resolved = True
-                                        break
-                                
-                                if not resolved:
-                                    # Fallback to the first found html file
-                                    for f in html_files:
-                                        if not f.startswith(".."):
-                                            direct_url = f"{direct_url.rstrip('/')}/{f.lstrip('/')}"
-                                            break
-                    break  # Success, stop retrying
-                except Exception as e:
-                    logger.debug("Probing direct_url %s failed: %s", direct_url, e)
-                    time.sleep(1.5)
 
         # Last resort: proxy URL
         display_id = session.display_id or submission_id

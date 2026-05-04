@@ -1455,9 +1455,8 @@ async def activate_project_service(
         try:
             logger.info(f"Activating project {project_db_id} from {project.container_resource}")
             
-            from app.utils.r2 import R2_PUBLIC_URL, get_file_bytes
+            from app.utils.r2 import R2_PUBLIC_URL, download_file_to_disk
             key = project.container_resource.replace(R2_PUBLIC_URL.rstrip('/') + "/", "")
-            tar_bytes = get_file_bytes(key)
             
             import shutil
             import uuid
@@ -1465,7 +1464,9 @@ async def activate_project_service(
             extract_dir = str(Path(settings.deployments_dir) / "activations" / "bundles" / str(uuid.uuid4()))
             Path(extract_dir).mkdir(parents=True, exist_ok=True)
             bundle_path = Path(extract_dir) / "bundle.tar.gz"
-            bundle_path.write_bytes(tar_bytes)
+            
+            # Use direct file download to avoid memory/timeout issues on large files
+            download_file_to_disk(key, str(bundle_path))
                 
             from app.deployment.services.docker.bundle_runner import run_from_bundle
             result = run_from_bundle(
@@ -1506,6 +1507,8 @@ async def activate_project_service(
                     from urllib.parse import urlparse as _urlparse
                     base = (settings.public_base_url or "http://localhost").rstrip("/")
                     _p = _urlparse(base)
+                    if _p.scheme == "https" or "ngrok" in _p.hostname:
+                        continue
                     direct_url = f"{_p.scheme}://{_p.hostname}:{host_port}"
                     if sp.get("service") == "frontend":
                         break  # prefer frontend port
@@ -1517,47 +1520,8 @@ async def activate_project_service(
                     from urllib.parse import urlparse as _urlparse
                     base = (settings.public_base_url or "http://localhost").rstrip("/")
                     _p = _urlparse(base)
-                    direct_url = f"{_p.scheme}://{_p.hostname}:{host_port}"
-
-            # Probe and auto-resolve entrypoint for directory listings
-            if direct_url:
-                import httpx
-                import time
-                import re
-                
-                # Wait a brief moment for the container's web server to boot
-                time.sleep(1.0)
-                
-                for _ in range(3):
-                    try:
-                        resp = httpx.get(direct_url, timeout=2.0)
-                        if resp.status_code == 200:
-                            text = resp.text.lower()
-                            # Check if it's a directory listing
-                            if "index of" in text or "directory listing" in text:
-                                html_files = re.findall(r'href=["\']([^"\']+\.html?)["\']', resp.text)
-                                if html_files:
-                                    priorities = ["index.html", "landing.html", "home.html", "login.html", "main.html", "shop.html"]
-                                    resolved = False
-                                    for p in priorities:
-                                        if any(f.endswith(p) for f in html_files):
-                                            direct_url = f"{direct_url.rstrip('/')}/{p}"
-                                            resolved = True
-                                            break
-                                    
-                                    if not resolved:
-                                        # Fallback to the first found html file
-                                        for f in html_files:
-                                            if not f.startswith(".."):
-                                                direct_url = f"{direct_url.rstrip('/')}/{f.lstrip('/')}"
-                                                break
-                                else:
-                                    # Default path if no html found
-                                    direct_url = f"{direct_url.rstrip('/')}/"
-                        break  # Success, stop retrying
-                    except Exception as e:
-                        logger.debug("Probing direct_url %s failed: %s", direct_url, e)
-                        time.sleep(1.5)
+                    if _p.scheme != "https" and "ngrok" not in _p.hostname:
+                        direct_url = f"{_p.scheme}://{_p.hostname}:{host_port}"
 
             session.preview_url = direct_url or f"/preview/{submission_id}/"
             dep.preview_url = session.preview_url

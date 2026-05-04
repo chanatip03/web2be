@@ -57,10 +57,10 @@ class Settings(BaseSettings):
     readiness_timeout_seconds: int = 45
     readiness_poll_interval_seconds: float = 2.0
     readiness_probe_paths: str = "/health,/healthz,/api/health,/status,/ping,/api,/"
-    preview_ttl_seconds: int = 5 * 60
-    stopped_deployment_cleanup_delay_seconds: int = 10 * 60
+    preview_ttl_seconds: int = 2 * 60 * 60
+    stopped_deployment_cleanup_delay_seconds: int = 2 * 60 * 60
     # Auto-stop delay after submission pipeline finishes or container is activated
-    container_auto_stop_delay_seconds: int = 5 * 60
+    container_auto_stop_delay_seconds: int = 2 * 60 * 60
 
     # ── Bundles ─────────────────────────────────────────────────
     # If false, bundle creation will NOT pull missing DB base images.
