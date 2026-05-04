@@ -625,13 +625,29 @@ def _do_teardown_now(submission_id: str) -> None:
     compose_succeeded = False
     if dep and dep.compose_project:
         compose_project = dep.compose_project
-        
+
+        # Resolve compose working dir — same priority as admin._cleanup_stopped_deployment_runtime
+        compose_dir: str | None = None
+        if dep.compose_file_path:
+            compose_dir = str(Path(dep.compose_file_path).parent)
+        else:
+            from app.deployment.core.config import settings as _dep_settings
+            _runtime_candidates = [
+                Path(_dep_settings.projects_dir)    / submission_id,
+                Path(_dep_settings.data_dir)        / "previews"    / submission_id,
+                Path(_dep_settings.deployments_dir) / "activations" / submission_id,
+            ]
+            _found = next((p for p in _runtime_candidates if p.exists()), None)
+            if _found:
+                compose_dir = str(_found)
+
         try:
             docker_client.compose_down(compose_dir or "/", compose_project, remove_volumes=True)
             logger.info("compose_down succeeded for submission %s (project=%s)", submission_id, compose_project)
             compose_succeeded = True
         except Exception as exc:
             logger.warning("compose_down failed for %s: %s — will try per-container removal", submission_id, exc)
+
 
     # ── 3. Fallback: stop + remove individual container ───────────────
     if not compose_succeeded:
@@ -1474,15 +1490,41 @@ async def activate_project_service(
             if not dep:
                 dep = DeploymentStatus(deployment_id=submission_id, project_id=submission_id)
             dep.status = "running"
-            dep.preview_url = session.preview_url
             dep.compose_project = session.compose_project
             if session.service_ports:
                 dep.service_ports = [ServicePortMapping(**sp) for sp in session.service_ports]
                 dep.compose_services = [sp.get("service") for sp in session.service_ports if sp.get("service")]
             dep.deploy_mode = "fullstack"
+
+            # Build direct container URL from service_ports
+            direct_url = None
+            for sp in (session.service_ports or []):
+                if not isinstance(sp, dict):
+                    continue
+                host_port = sp.get("host_port") or sp.get("hostPort")
+                if host_port and sp.get("service") in ("frontend", "app", "web", "backend"):
+                    from urllib.parse import urlparse as _urlparse
+                    base = (settings.public_base_url or "http://localhost").rstrip("/")
+                    _p = _urlparse(base)
+                    direct_url = f"{_p.scheme}://{_p.hostname}:{host_port}"
+                    if sp.get("service") == "frontend":
+                        break  # prefer frontend port
+
+            if not direct_url and session.service_ports:
+                sp = session.service_ports[0] if isinstance(session.service_ports[0], dict) else {}
+                host_port = sp.get("host_port") or sp.get("hostPort")
+                if host_port:
+                    from urllib.parse import urlparse as _urlparse
+                    base = (settings.public_base_url or "http://localhost").rstrip("/")
+                    _p = _urlparse(base)
+                    direct_url = f"{_p.scheme}://{_p.hostname}:{host_port}"
+
+            session.preview_url = direct_url or f"/preview/{submission_id}/"
+            dep.preview_url = session.preview_url
+            _sessions[submission_id] = session
             deployment_store.save(dep)
             
-            logger.info(f"Activated project {project_db_id} successfully")
+            logger.info(f"Activated project {project_db_id} successfully → {session.preview_url}")
             
         except Exception as e:
             logger.exception(f"Activation error: {e}")
@@ -1495,6 +1537,6 @@ async def activate_project_service(
     background_tasks.add_task(_do_activate)
     return {
         "status": "starting",
-        "preview_url": f"/preview/{submission_id}/",
+        "preview_url": None,  # not ready yet — client should poll /preview/status
         "seconds_remaining": session.seconds_remaining,
     }

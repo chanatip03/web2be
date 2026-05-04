@@ -174,9 +174,14 @@ async def deploy_project(
             if dep.project_id != project_id:
                 continue
             try:
-                if dep.compose_project and dep.compose_file_path:
-                    compose_dir = str(Path(dep.compose_file_path).parent)
+                if dep.compose_project:
+                    if dep.compose_file_path:
+                        compose_dir = str(Path(dep.compose_file_path).parent)
+                    else:
+                        compose_dir = str(Path(settings.data_dir) / "previews" / dep.project_id)
                     docker_client.compose_down(compose_dir, dep.compose_project, remove_volumes=True)
+                    import shutil
+                    shutil.rmtree(compose_dir, ignore_errors=True)
                 elif dep.container_id:
                     docker_client.stop_container(dep.container_id)
                     docker_client.remove_container(dep.container_id)
@@ -398,8 +403,11 @@ async def stop_deployment(deployment_id: str):
 
     if deployment.container_id:
         docker_client.stop_container(deployment.container_id)
-    elif deployment.compose_project and deployment.compose_file_path:
-        compose_dir = str(Path(deployment.compose_file_path).parent)
+    elif deployment.compose_project:
+        if deployment.compose_file_path:
+            compose_dir = str(Path(deployment.compose_file_path).parent)
+        else:
+            compose_dir = str(Path(settings.data_dir) / "previews" / deployment.project_id)
         docker_client.compose_down(compose_dir, deployment.compose_project)
 
     deployment.status = "stopped"
@@ -417,19 +425,38 @@ async def delete_deployment(deployment_id: str):
     if not deployment:
         raise HTTPException(status_code=404, detail="Deployment not found")
 
-    # Stop / tear down containers
+    # ── Stop / tear down containers ───────────────────────────────────
     try:
-        if deployment.compose_project and deployment.compose_file_path:
-            compose_dir = str(Path(deployment.compose_file_path).parent)
-            docker_client.compose_down(compose_dir, deployment.compose_project)
+        if deployment.compose_project:
+            # Resolve compose working dir
+            if deployment.compose_file_path:
+                compose_dir = str(Path(deployment.compose_file_path).parent)
+            else:
+                _candidates = [
+                    Path(settings.projects_dir)    / deployment.deployment_id,
+                    Path(settings.data_dir)        / "previews"    / deployment.deployment_id,
+                    Path(settings.deployments_dir) / "activations" / deployment.deployment_id,
+                ]
+                compose_dir = next(
+                    (str(p) for p in _candidates if p.exists()), "/"
+                )
+            docker_client.compose_down(compose_dir, deployment.compose_project, remove_volumes=True)
         elif deployment.container_id:
             docker_client.stop_container(deployment.container_id)
             docker_client.remove_container(deployment.container_id)
     except Exception:
         pass  # Best-effort
 
+    # ── Full disk cleanup ─────────────────────────────────────────────
+    try:
+        from app.utils.archive import delete_directory
+        delete_directory(deployment_id)
+    except Exception:
+        pass
+
     deployment_store.delete(deployment_id)
     return {"message": f"Deployment {deployment_id} deleted"}
+
 
 
 # ── Rebuild (redeploy) existing deployment ──────────────────────────────
@@ -448,9 +475,14 @@ async def rebuild_deployment(deployment_id: str, background_tasks: BackgroundTas
 
     # Tear down current containers
     try:
-        if deployment.compose_project and deployment.compose_file_path:
-            compose_dir = str(Path(deployment.compose_file_path).parent)
+        if deployment.compose_project:
+            if deployment.compose_file_path:
+                compose_dir = str(Path(deployment.compose_file_path).parent)
+            else:
+                compose_dir = str(Path(settings.data_dir) / "previews" / deployment.project_id)
             docker_client.compose_down(compose_dir, deployment.compose_project, remove_volumes=True)
+            import shutil
+            shutil.rmtree(compose_dir, ignore_errors=True)
         elif deployment.container_id:
             docker_client.stop_container(deployment.container_id)
             docker_client.remove_container(deployment.container_id)

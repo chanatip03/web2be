@@ -11,7 +11,12 @@ def get_current_user(
     request: Request,
     db: Session = Depends(get_db)
 ):
+    # 1. Prefer cookie (same-origin flow)
     token = request.cookies.get("access_token")
+
+    # 2. Fallback: query param (cross-origin redirect, e.g. onrender.com → 72.61.120.249:8000)
+    if not token:
+        token = request.query_params.get("token")
 
     if not token:
         raise HTTPException(status_code=401, detail="No access token")

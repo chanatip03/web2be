@@ -206,18 +206,38 @@ def _launch_bundle(submission_id: str) -> PreviewSession:
 
         # 3. Update session
         session.status = "running"
-        # Use display_id if available for a cleaner URL, fallback to UUID
+        service_ports_data = result.get("service_ports", [])
+
+        # Build direct container URL from service_ports (prefer frontend port)
+        direct_url = None
+        for sp in service_ports_data:
+            if not isinstance(sp, dict):
+                continue
+            host_port = sp.get("host_port") or sp.get("hostPort")
+            if host_port:
+                from urllib.parse import urlparse as _urlparse
+                base = (settings.public_base_url or "http://localhost").rstrip("/")
+                _p = _urlparse(base)
+                candidate = f"{_p.scheme}://{_p.hostname}:{host_port}"
+                if sp.get("service") == "frontend":
+                    direct_url = candidate
+                    break
+                if direct_url is None:
+                    direct_url = candidate  # use first available as fallback
+
+        # Last resort: proxy URL
         display_id = session.display_id or submission_id
-        session.preview_url = f"/preview/{display_id}/"
+        session.preview_url = direct_url or f"/preview/{display_id}/"
         session.compose_project = compose_project
         session.runtime_dir = str(runtime)
         session.loaded_images = result.get("image_refs", [])
-        session.service_ports = result.get("service_ports", [])
+        session.service_ports = service_ports_data
 
         logger.info(
             "Preview started for %s → %s (project=%s)",
             submission_id, session.preview_url, compose_project,
         )
+
 
     except Exception as exc:
         logger.exception("Failed to launch bundle preview for %s: %s", submission_id, exc)

@@ -360,10 +360,8 @@ async def get_admin_containers(db: Session, current_user: dict) -> list[AdminCon
             health = await health_checker.check_container(health_target_container_id)
             status_value = _normalize_container_status(health.get("docker_status") or status_value)
 
-        has_stop_target = bool(
-            (deployment.compose_project and deployment.compose_file_path)
-            or deployment.container_id
-        )
+        # canStop: only needs compose_project OR container_id — compose_file_path is optional
+        has_stop_target = bool(deployment.compose_project or deployment.container_id)
         can_stop = has_stop_target and status_value not in {"stopped", "error", "unknown"}
 
         rows.append(
@@ -392,6 +390,15 @@ def stop_admin_container(deployment_id: str, current_user: dict) -> None:
         if deployment.compose_project and deployment.compose_file_path:
             compose_dir = str(Path(deployment.compose_file_path).parent)
             docker_client.compose_stop(compose_dir, deployment.compose_project)
+        elif deployment.compose_project:
+            # No compose_file_path — try known runtime dirs in priority order
+            _candidates = [
+                Path(settings.projects_dir)    / deployment.deployment_id,
+                Path(settings.data_dir)        / "previews"    / deployment.deployment_id,
+                Path(settings.deployments_dir) / "activations" / deployment.deployment_id,
+            ]
+            _dir = next((str(p) for p in _candidates if p.exists()), "/")
+            docker_client.compose_stop(_dir, deployment.compose_project)
         elif deployment.container_id:
             docker_client.stop_container(deployment.container_id)
         else:
