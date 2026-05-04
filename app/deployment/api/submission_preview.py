@@ -232,9 +232,7 @@ def _launch_bundle(submission_id: str) -> PreviewSession:
                 from urllib.parse import urlparse as _urlparse
                 base = (settings.public_base_url or "http://localhost").rstrip("/")
                 _p = _urlparse(base)
-                # If using HTTPS (like ngrok), direct ports won't work, so we rely on proxy.
-                if _p.scheme == "https" or "ngrok" in _p.hostname:
-                    continue
+                # Removed HTTPS/ngrok check to allow direct port access
                     
                 candidate = f"{_p.scheme}://{_p.hostname}:{host_port}"
                 if sp.get("service") == "frontend":

@@ -1523,8 +1523,7 @@ async def activate_project_service(
                     from urllib.parse import urlparse as _urlparse
                     base = (settings.public_base_url or "http://localhost").rstrip("/")
                     _p = _urlparse(base)
-                    if _p.scheme == "https" or "ngrok" in _p.hostname:
-                        continue
+                    # Removed HTTPS/ngrok check to allow direct port access
                     direct_url = f"{_p.scheme}://{_p.hostname}:{host_port}"
                     if sp.get("service") == "frontend":
                         break  # prefer frontend port
@@ -1536,8 +1535,8 @@ async def activate_project_service(
                     from urllib.parse import urlparse as _urlparse
                     base = (settings.public_base_url or "http://localhost").rstrip("/")
                     _p = _urlparse(base)
-                    if _p.scheme != "https" and "ngrok" not in _p.hostname:
-                        direct_url = f"{_p.scheme}://{_p.hostname}:{host_port}"
+                    # Removed HTTPS/ngrok check
+                    direct_url = f"{_p.scheme}://{_p.hostname}:{host_port}"
 
             session.preview_url = direct_url or f"/preview/{submission_id}/"
             dep.preview_url = session.preview_url
