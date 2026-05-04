@@ -251,14 +251,7 @@ async def run_deployment(deployment_id: str, project_id: str, deploy_mode: str |
         deployment.container_id = result.get("container_id")
         deployment.image_tag = result.get("image_tag")
         deployment.image_tags = result.get("image_tags")
-        # Append entry point if present
-        raw_preview_url = result.get("preview_url")
-        if raw_preview_url and project.analysis and project.analysis.entry_points:
-            ep = project.analysis.entry_points.get("frontend") or project.analysis.entry_points.get("main")
-            if ep and ep != "index.html":
-                raw_preview_url = f"{raw_preview_url}/{ep.lstrip('/')}"
-        deployment.preview_url = raw_preview_url
-        
+        deployment.preview_url = result.get("preview_url")
         deployment.compose_project = result.get("compose_project")
         deployment.compose_file_path = result.get("compose_file")
         deployment.compose_services = result.get("compose_services")

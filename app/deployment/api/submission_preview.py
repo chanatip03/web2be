@@ -225,28 +225,9 @@ def _launch_bundle(submission_id: str) -> PreviewSession:
                 if direct_url is None:
                     direct_url = candidate  # use first available as fallback
 
-        # 4. Resolve entrypoint path if available
-        entry_path = ""
-        try:
-            dep = deployment_store.get(submission_id)
-            if dep and dep.project_id:
-                from app.deployment.services.deployer.pipeline import project_store
-                proj = project_store.get(dep.project_id)
-                if proj and proj.analysis and proj.analysis.entry_points:
-                    ep = proj.analysis.entry_points.get("frontend") or proj.analysis.entry_points.get("main")
-                    if ep and ep != "index.html":
-                        entry_path = f"/{ep.lstrip('/')}"
-        except Exception as exc:
-            logger.warning("Failed to resolve entrypoint for %s: %s", submission_id, exc)
-
         # Last resort: proxy URL
         display_id = session.display_id or submission_id
-        
-        if direct_url:
-            session.preview_url = f"{direct_url}{entry_path}"
-        else:
-            session.preview_url = f"/preview/{display_id}/{entry_path.lstrip('/')}"
-
+        session.preview_url = direct_url or f"/preview/{display_id}/"
         session.compose_project = compose_project
         session.runtime_dir = str(runtime)
         session.loaded_images = result.get("image_refs", [])
