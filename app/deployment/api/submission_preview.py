@@ -225,6 +225,43 @@ def _launch_bundle(submission_id: str) -> PreviewSession:
                 if direct_url is None:
                     direct_url = candidate  # use first available as fallback
 
+        # Probe and auto-resolve entrypoint for directory listings
+        if direct_url:
+            import httpx
+            import time
+            import re
+            
+            # Wait a brief moment for the container's web server to boot
+            time.sleep(1.0)
+            
+            for _ in range(3):
+                try:
+                    resp = httpx.get(direct_url, timeout=2.0)
+                    if resp.status_code == 200:
+                        text = resp.text.lower()
+                        # Check if it's a directory listing (e.g. from http-server or nginx)
+                        if "index of" in text or "directory listing" in text:
+                            html_files = re.findall(r'href=["\']([^"\']+\.html?)["\']', resp.text)
+                            if html_files:
+                                priorities = ["index.html", "landing.html", "home.html", "login.html", "main.html", "shop.html"]
+                                resolved = False
+                                for p in priorities:
+                                    if any(f.endswith(p) for f in html_files):
+                                        direct_url = f"{direct_url.rstrip('/')}/{p}"
+                                        resolved = True
+                                        break
+                                
+                                if not resolved:
+                                    # Fallback to the first found html file
+                                    for f in html_files:
+                                        if not f.startswith(".."):
+                                            direct_url = f"{direct_url.rstrip('/')}/{f.lstrip('/')}"
+                                            break
+                    break  # Success, stop retrying
+                except Exception as e:
+                    logger.debug("Probing direct_url %s failed: %s", direct_url, e)
+                    time.sleep(1.5)
+
         # Last resort: proxy URL
         display_id = session.display_id or submission_id
         session.preview_url = direct_url or f"/preview/{display_id}/"
