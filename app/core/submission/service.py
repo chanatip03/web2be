@@ -62,6 +62,7 @@ from .fs import (
     write_manifest,
 )
 from .manifest import SubmissionManifest, StepRecord, build_initial_manifest, touch_manifest, utc_now_iso
+from app.utils.archive import delete_directory
 
 
 _MODE_ALIASES = {
@@ -588,114 +589,162 @@ def _clone_repo_to_source(repo_url: str, source_dir: Path) -> None:
     shutil.rmtree(source_dir / ".git", ignore_errors=True)
 
 
-def _teardown_deployment_containers(submission_id: str) -> None:
-    """Stop & remove the Docker containers that were spun up during the submission pipeline.
 
-    This is a fully synchronous helper that can be called safely from a sync
-    background thread (i.e. from ``run_submission_pipeline_sync``) without
-    needing a running asyncio event loop.
+# ── Submission container auto-stop timers ─────────────────────────────────────
+# Uses the same pattern as admin/service.py _cleanup_timers
+import threading as _threading
 
-    Strategy:
-    1. Try ``docker compose down`` using the compose_project stored in the
-       deployment_store (set by ``run_deployment``).
-    2. Fall back to ``docker rm -f <container_id>`` using the container_id
-       persisted on the Project DB record.
+_submission_cleanup_timers: dict[str, _threading.Timer] = {}
+_submission_cleanup_timers_lock = _threading.Lock()
+
+
+def _do_teardown_now(submission_id: str) -> None:
+    """Docker stop/remove + disk cleanup, mirroring admin._cleanup_stopped_deployment_runtime.
+
+    Cleanup order:
+    1. compose down  (preferred — uses compose_file_path when available)
+    2. Fallback: stop + remove individual container from DB record
+    3. Remove Docker images for this deployment
+    4. Update deployment_store (mark stopped, clear URLs/ports)
+    5. Clean preview session if active
+    6. Disk cleanup via delete_directory(submission_id)
     """
-    import subprocess as _sp
+    logger.info("Auto-stop timer fired for submission %s — tearing down containers", submission_id)
 
-    # ── 1. compose down via deployment_store ────────────────────────
+    from app.deployment.services.deployer.pipeline import deployment_store
+    from app.utils.archive import delete_directory
+
+    # ── 1. Fetch deployment record ────────────────────────────────────
+    dep = None
     try:
-        from app.deployment.services.deployer.pipeline import deployment_store
         dep = deployment_store.get(submission_id)
-        if dep and dep.compose_project:
-            compose_project = dep.compose_project
-            # Find any runtime dir that was used during deployment
-            runtime_candidates = [
-                Path(settings.data_dir) / "previews" / submission_id,
-                Path(settings.deployments_dir) / "activations" / submission_id,
-                Path(settings.projects_dir) / submission_id,
-            ]
-            runtime_dir = next((p for p in runtime_candidates if p.exists()), None)
-            if runtime_dir:
-                try:
-                    docker_client.compose_down(str(runtime_dir), compose_project, remove_volumes=True)
-                    logger.info("compose_down succeeded for submission %s (project=%s)", submission_id, compose_project)
-                    return
-                except Exception as exc:
-                    logger.warning("compose_down failed for %s: %s — will try per-container removal", submission_id, exc)
-            # compose down without a compose file: docker compose -p <project> down
-            try:
-                result = _sp.run(
-                    ["docker", "compose", "-p", compose_project, "down", "-v", "--remove-orphans"],
-                    capture_output=True, text=True, timeout=60,
-                )
-                if result.returncode == 0:
-                    logger.info("docker compose -p %s down succeeded for submission %s", compose_project, submission_id)
-                    return
-                logger.warning("docker compose -p %s down failed: %s", compose_project, result.stderr)
-            except Exception as exc:
-                logger.warning("docker compose -p down raised: %s", exc)
     except Exception as exc:
         logger.warning("Could not read deployment_store for %s: %s", submission_id, exc)
 
-    # ── 2. Fallback: remove individual container by stored container_id ──
-    try:
-        from app.db.database import SessionLocal as _SL
-        from app.models.schema import Project as _Project
-        with _SL() as _db:
-            proj = _db.query(_Project).filter(_Project.submission_uuid == submission_id).first()
-            container_id = proj.container_id if proj else None
-        if container_id:
-            result = _sp.run(
-                ["docker", "rm", "-f", container_id],
-                capture_output=True, text=True, timeout=30,
-            )
-            if result.returncode == 0:
-                logger.info("docker rm -f %s succeeded for submission %s", container_id, submission_id)
-            else:
-                logger.warning("docker rm -f %s failed: %s", container_id, result.stderr)
-    except Exception as exc:
-        logger.warning("Fallback container removal failed for %s: %s", submission_id, exc)
+    # ── 2. compose down (preferred) ──────────────────────────────────
+    compose_succeeded = False
+    if dep and dep.compose_project:
+        compose_project = dep.compose_project
+        
+        try:
+            docker_client.compose_down(compose_dir or "/", compose_project, remove_volumes=True)
+            logger.info("compose_down succeeded for submission %s (project=%s)", submission_id, compose_project)
+            compose_succeeded = True
+        except Exception as exc:
+            logger.warning("compose_down failed for %s: %s — will try per-container removal", submission_id, exc)
 
-    # ── 3. Clean up on-disk working directories ──────────────────────────
-    # These directories are only needed during the pipeline run. Once the
-    # pipeline has finished (and artifacts have been uploaded to R2), they
-    # can be safely removed to free disk space.
+    # ── 3. Fallback: stop + remove individual container ───────────────
+    if not compose_succeeded:
+        try:
+            from app.db.database import SessionLocal as _SL
+            from app.models.schema import Project as _Project
+            with _SL() as _db:
+                proj = _db.query(_Project).filter(_Project.submission_uuid == submission_id).first()
+                container_name = proj.container_id if proj else None
+            if container_name:
+                docker_client.stop_container(container_name)
+                docker_client.remove_container(container_name)
+                logger.info("Stopped and removed container %s for submission %s", container_name, submission_id)
+            elif dep and dep.container_id:
+                docker_client.stop_container(dep.container_id)
+                docker_client.remove_container(dep.container_id)
+                logger.info("Stopped and removed container %s (from dep store) for submission %s", dep.container_id, submission_id)
+        except Exception as exc:
+            logger.warning("Fallback container removal failed for %s: %s", submission_id, exc)
 
-    # 3a. data/submissions/<uuid>
-    # Keep manifest + artifacts for status polling and downloads after the
-    # pipeline completes; remove only large transient inputs/workspace.
-    try:
-        sub_root = get_submission_root(submission_id)
-        if sub_root.exists():
-            for transient_name in ("original", "source"):
-                transient_path = sub_root / transient_name
-                if transient_path.exists():
-                    shutil.rmtree(transient_path, ignore_errors=True)
-                    logger.info("Deleted submission transient dir: %s", transient_path)
-    except Exception as exc:
-        logger.warning("Failed to delete submission dir for %s: %s", submission_id, exc)
+    # ── 4. Remove Docker images ──────────────────────────────────────
+    if dep:
+        try:
+            from app.core.admin.service import _collect_deployment_image_refs
+            image_refs = _collect_deployment_image_refs(dep)
+            if image_refs:
+                docker_client.remove_images(image_refs)
+                logger.info("Removed %d image(s) for submission %s", len(image_refs), submission_id)
+        except Exception as exc:
+            logger.warning("Image removal failed for %s: %s", submission_id, exc)
 
-    # 3b. data/projects/<uuid>  (materialised source copy used by docker deployer)
-    try:
-        projects_dir = Path(settings.projects_dir) / submission_id
-        if projects_dir.exists():
-            shutil.rmtree(projects_dir, ignore_errors=True)
-            logger.info("Deleted projects dir: %s", projects_dir)
-    except Exception as exc:
-        logger.warning("Failed to delete projects dir for %s: %s", submission_id, exc)
+    # ── 5. Update deployment_store ───────────────────────────────────
+    if dep:
+        try:
+            dep.status = "stopped"
+            dep.container_state = "removed"
+            dep.container_id = None
+            dep.preview_url = None
+            dep.api_url = None
+            dep.host_port = None
+            dep.extra_ports = []
+            dep.service_ports = []
+            deployment_store.save(dep)
+        except Exception as exc:
+            logger.warning("Failed to update deployment_store for %s: %s", submission_id, exc)
 
-    # 3c. data/security_scan_results/<uuid>.json  (duplicate written by save_result())
+    # ── 6. Clean preview session (removes loaded images) ─────────────
     try:
-        import os as _os
-        results_dir_env = _os.environ.get("RESULTS_DIR", "")
-        if results_dir_env:
-            scan_result = Path(results_dir_env) / f"{submission_id}.json"
-            if scan_result.exists():
-                scan_result.unlink(missing_ok=True)
-                logger.info("Deleted security scan result: %s", scan_result)
+        from app.deployment.api.submission_preview import _sessions, _teardown as _preview_teardown
+        if submission_id in _sessions:
+            _preview_teardown(submission_id)
+            logger.info("Cleaned up preview session for %s", submission_id)
     except Exception as exc:
-        logger.warning("Failed to delete security scan result for %s: %s", submission_id, exc)
+        logger.warning("Failed to clean preview session for %s: %s", submission_id, exc)
+
+    # ── 7. Disk cleanup ──────────────────────────────────────────────
+    try:
+        delete_directory(submission_id)
+        logger.info("Disk cleanup succeeded for submission %s", submission_id)
+    except Exception as exc:
+        logger.warning("Disk cleanup failed for %s: %s", submission_id, exc)
+
+    # Remove timer reference
+    with _submission_cleanup_timers_lock:
+        _submission_cleanup_timers.pop(submission_id, None)
+
+
+
+
+
+
+def _schedule_submission_cleanup(submission_id: str, delay_seconds: float | None = None) -> None:
+    """Schedule a deferred container stop + disk cleanup for *submission_id*.
+
+    Can be called:
+    - from the submission pipeline ``finally`` block (auto-stop after pipeline)
+    - from an "activate container" flow (auto-stop after preview window)
+
+    If called again before the timer fires, the existing timer is cancelled and
+    a fresh one is started, effectively extending the window.
+
+    Args:
+        submission_id: The submission UUID to clean up.
+        delay_seconds: Override the configured delay. Defaults to
+            ``settings.container_auto_stop_delay_seconds`` (5 minutes).
+    """
+    if delay_seconds is None:
+        delay_seconds = float(settings.container_auto_stop_delay_seconds)
+
+    with _submission_cleanup_timers_lock:
+        existing = _submission_cleanup_timers.pop(submission_id, None)
+        if existing is not None:
+            existing.cancel()
+
+        timer = _threading.Timer(delay_seconds, _do_teardown_now, args=(submission_id,))
+        timer.daemon = True
+        _submission_cleanup_timers[submission_id] = timer
+        timer.start()
+
+    logger.info(
+        "Scheduled auto-stop for submission %s in %.0f seconds (%.1f min)",
+        submission_id, delay_seconds, delay_seconds / 60,
+    )
+
+
+def _teardown_deployment_containers(submission_id: str) -> None:
+    """Schedule the container teardown 5 minutes after the pipeline finishes.
+
+    Delegates to ``_schedule_submission_cleanup`` which uses a ``threading.Timer``
+    so the containers remain accessible for a short review window before being
+    automatically stopped and cleaned up.
+    """
+    _schedule_submission_cleanup(submission_id)
 
 
 def run_submission_pipeline_sync(submission_id: str) -> None:
@@ -930,34 +979,28 @@ async def _run_deployment_step(manifest: SubmissionManifest) -> None:
         preview_url=preview_url,
     )
     # Persist the container_id to the Project record so it can be referenced later
+    # For compose deployments: get all container names in this compose project
+    # For single container deployments: use the container_id returned by the builder
     final_container_id = deployment.container_id
     if deployment.compose_project:
         try:
             import subprocess
             res = subprocess.run(
-                ["docker", "ps", "--format", "{{.Names}}", "--filter", f"label=com.docker.compose.project={deployment.compose_project}"],
+                ["docker", "ps", "--format", "{{.Names}}",
+                 "--filter", f"label=com.docker.compose.project={deployment.compose_project}"],
                 capture_output=True, text=True
             )
             c_ids = [cid.strip() for cid in res.stdout.strip().split('\n') if cid.strip()]
             if c_ids:
+                # Store only the first container name — compose_project already stored separately
                 final_container_id = c_ids[0]
+                logger.info("Resolved compose container name: %s (project=%s)",
+                            final_container_id, deployment.compose_project)
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Failed to run docker ps: {e}")
+            logger.warning("Failed to resolve compose container names: %s", e)
 
-    # Fallback to older container ID command if no compose_project found string
-    if not final_container_id:
-        try:
-            import subprocess
-            res = subprocess.run(
-                ["docker", "ps", "--format", "{{.Names}}", "--latest"],
-                capture_output=True, text=True
-            )
-            c_ids = [cid.strip() for cid in res.stdout.strip().split('\n') if cid.strip()]
-            if c_ids:
-                final_container_id = c_ids[0]
-        except Exception as e:
-            pass
+    # NOTE: removed dangerous `docker ps --latest` fallback which could pick up
+    # a container belonging to a completely different submission.
 
     container_resource_url = None
     target_deployments_dir = Path(settings.data_dir) / "submissions" / submission_id / "artifacts" / "deployment"
