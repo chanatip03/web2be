@@ -5,16 +5,14 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import HTTPException
 
+from app.utils.generate_token import create_access_token, decode_token
+
 DISCORD_API_BASE = "https://discord.com/api/v10"
 
 DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "1486465516406182090")
 DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "bMlnLLOySm_-c8puBqfIcVInLNxMryOT")
 DISCORD_REDIRECT_URI = os.getenv("DISCORD_REDIRECT_URI", "http://localhost:8000/api/discord/callback")
 FRONTEND_URL = os.getenv("DISCORD_FRONTEND_URL", "http://localhost:3000/profile")
-
-
-import base64
-import json
 
 def build_discord_authorize_url(state: str) -> str:
     if not DISCORD_CLIENT_ID or not DISCORD_REDIRECT_URI:
@@ -37,14 +35,11 @@ def build_discord_authorize_url(state: str) -> str:
 
 def generate_oauth_state(user_id: int) -> str:
     nonce = secrets.token_urlsafe(16)
-    payload = json.dumps({"uid": user_id, "nonce": nonce})
-    return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+    return create_access_token({"uid": user_id, "nonce": nonce})
 
 def decode_oauth_state(state: str) -> dict | None:
     try:
-        padding = "=" * (4 - len(state) % 4)
-        payload = base64.urlsafe_b64decode(state + padding).decode()
-        return json.loads(payload)
+        return decode_token(state)
     except Exception:
         return None
 

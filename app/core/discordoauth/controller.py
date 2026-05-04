@@ -33,17 +33,7 @@ async def connect_discord(
     state = generate_oauth_state(current_user["id"])
     authorize_url = build_discord_authorize_url(state)
 
-    response = RedirectResponse(url=authorize_url)
-    response.set_cookie(
-        key="discord_oauth_state",
-        value=state,
-        httponly=True,
-        samesite="lax",
-        secure=False,
-        max_age=600,
-        path="/",
-    )
-    return response
+    return RedirectResponse(url=authorize_url)
 
 
 @router.get("/callback")
@@ -55,10 +45,9 @@ async def discord_callback(
 ):
     if not code:
         raise HTTPException(status_code=400, detail="Missing code")
-
-    saved_state = request.cookies.get("discord_oauth_state")
-    if not state or not saved_state or state != saved_state:
-        raise HTTPException(status_code=400, detail="Invalid OAuth state")
+        
+    if not state:
+        raise HTTPException(status_code=400, detail="Missing OAuth state")
 
     from .service import decode_oauth_state
     decoded = decode_oauth_state(state)
@@ -90,18 +79,14 @@ async def discord_callback(
         raise HTTPException(status_code=404, detail="Student not found")
 
     if FRONTEND_URL:
-        response = RedirectResponse(
+        return RedirectResponse(
             url=f"{FRONTEND_URL}?discord=linked",
             status_code=302,
         )
-        response.delete_cookie("discord_oauth_state", path="/")
-        return response
 
-    response = JSONResponse(
+    return JSONResponse(
         {
             "message": "Discord linked successfully",
             "discord_user_id": updated_student.discord_user_id,
         }
     )
-    response.delete_cookie("discord_oauth_state", path="/")
-    return response
