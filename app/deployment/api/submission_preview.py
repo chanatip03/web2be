@@ -11,7 +11,6 @@ Endpoints match the pattern the frontend page.tsx already calls:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import shutil
 import time
@@ -20,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
@@ -38,15 +37,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/project", tags=["Submission Preview"])
 
 # ── Preview TTL ──────────────────────────────────────────────────────────────
-_TTL_SECONDS = settings.preview_ttl_seconds
+_TTL_SECONDS = settings.preview_ttl_seconds  # used only for expires_at display
 
 # ── In-memory session store ───────────────────────────────────────────────────
 # Keyed by submission_id.  Persisted only for the process lifetime so a server
 # restart will trigger a fresh deploy on next visit (which is acceptable).
 _sessions: Dict[str, "PreviewSession"] = {}
-
-# Background cleanup tasks — we keep a reference so they aren't GC'd early.
-_cleanup_tasks: Dict[str, asyncio.Task] = {}
 
 
 class PreviewSession(BaseModel):
@@ -173,26 +169,18 @@ def _teardown(submission_id: str) -> None:
         deployment_store.save(dep)
 
 
-async def _ttl_cleanup(submission_id: str) -> None:
-    """Sleep for TTL seconds, then tear down the session."""
-    await asyncio.sleep(_TTL_SECONDS)
-    logger.info("TTL expired for submission preview %s — stopping container", submission_id)
-    _teardown(submission_id)
-    _cleanup_tasks.pop(submission_id, None)
-
-
 def _schedule_cleanup(submission_id: str) -> None:
-    """Cancel any existing cleanup task and schedule a fresh one."""
-    existing = _cleanup_tasks.pop(submission_id, None)
-    if existing and not existing.done():
-        existing.cancel()
+    """Schedule a 5-minute auto-stop timer via the shared submission cleanup helper.
+
+    Delegates to ``_schedule_submission_cleanup`` in submission/service.py so
+    that the preview activation and the submission pipeline share the same timer
+    mechanism, cleanup logic, and configurable delay.
+    """
     try:
-        loop = asyncio.get_event_loop()
-        task = loop.create_task(_ttl_cleanup(submission_id))
-        _cleanup_tasks[submission_id] = task
-    except RuntimeError:
-        # No running event loop (e.g. during tests) — skip scheduling
-        pass
+        from app.core.submission.service import _schedule_submission_cleanup
+        _schedule_submission_cleanup(submission_id)
+    except Exception as exc:
+        logger.warning("Failed to schedule auto-stop for preview %s: %s", submission_id, exc)
 
 
 def _launch_bundle(submission_id: str) -> PreviewSession:
@@ -263,7 +251,7 @@ def _launch_bundle(submission_id: str) -> PreviewSession:
 # ── API Endpoints ─────────────────────────────────────────────────────────────
 
 @router.post("/{submission_id}/preview/start")
-async def start_preview(submission_id: str, background_tasks: BackgroundTasks):
+async def start_preview(submission_id: str, background_tasks: BackgroundTasks, request: Request):
     """Pull the submission bundle from R2 and run it as Docker containers.
 
     - If already running: returns immediately with current URL.
@@ -277,9 +265,13 @@ async def start_preview(submission_id: str, background_tasks: BackgroundTasks):
 
     # Already running — return fast
     if existing and existing.status == "running" and existing.seconds_remaining > 0:
+        preview_url = existing.preview_url
+        if preview_url and not preview_url.startswith("http"):
+            preview_url = f"{str(request.base_url).rstrip('/')}{preview_url}"
+            
         return {
             "status": "running",
-            "preview_url": existing.preview_url,
+            "preview_url": preview_url,
             "expires_at": existing.expires_at.isoformat(),
             "seconds_remaining": existing.seconds_remaining,
             "service_ports": existing.service_ports,
@@ -322,7 +314,7 @@ def _launch_and_schedule(submission_id: str) -> None:
 
 
 @router.get("/{submission_id}/preview/redirect")
-async def redirect_to_preview(submission_id: str, role: Optional[str] = None, fallback: Optional[str] = None):
+async def redirect_to_preview(submission_id: str, request: Request, role: Optional[str] = None, fallback: Optional[str] = None):
     """Redirect to the already-running preview URL without triggering a rebuild."""
     resolved_id = _resolve_submission_id(submission_id)
     
@@ -346,12 +338,16 @@ async def redirect_to_preview(submission_id: str, role: Optional[str] = None, fa
             url = f"/preview/{resolved_id}/"
             if role:
                 url += f"?role={role}"
-            return RedirectResponse(url=url, status_code=302)
+            abs_url = f"{str(request.base_url).rstrip('/')}{url}"
+            return RedirectResponse(url=abs_url, status_code=302)
     
     # Check sessions as fallback
     session = _sessions.get(resolved_id)
     if session and session.status == "running" and session.preview_url:
-        return RedirectResponse(url=session.preview_url, status_code=302)
+        preview_url = session.preview_url
+        if preview_url and not preview_url.startswith("http"):
+            preview_url = f"{str(request.base_url).rstrip('/')}{preview_url}"
+        return RedirectResponse(url=preview_url, status_code=302)
         
     if fallback:
         return RedirectResponse(url=fallback, status_code=302)
@@ -363,7 +359,7 @@ async def redirect_to_preview(submission_id: str, role: Optional[str] = None, fa
 
 
 @router.get("/{submission_id}/preview/status")
-async def get_preview_status(submission_id: str):
+async def get_preview_status(submission_id: str, request: Request):
     """Poll container status.  Returns preview_url once running."""
     submission_id = _resolve_submission_id(submission_id)
     session = _sessions.get(submission_id)
@@ -373,9 +369,13 @@ async def get_preview_status(submission_id: str):
             detail=f"No active preview session for submission {submission_id}. POST /preview/start first.",
         )
 
+    preview_url = session.preview_url
+    if preview_url and not preview_url.startswith("http"):
+        preview_url = f"{str(request.base_url).rstrip('/')}{preview_url}"
+
     return {
         "status": session.status,
-        "preview_url": session.preview_url,
+        "preview_url": preview_url,
         "error": session.error,
         "expires_at": session.expires_at.isoformat(),
         "seconds_remaining": session.seconds_remaining,
@@ -393,10 +393,16 @@ async def stop_preview(submission_id: str):
             detail=f"No preview session found for {submission_id}",
         )
 
-    # Cancel scheduled cleanup and tear down immediately
-    task = _cleanup_tasks.pop(submission_id, None)
-    if task and not task.done():
-        task.cancel()
+    # Cancel any pending auto-stop timer and tear down immediately
+    try:
+        from app.core.submission.service import _submission_cleanup_timers, _submission_cleanup_timers_lock
+        import threading as _t
+        with _submission_cleanup_timers_lock:
+            existing = _submission_cleanup_timers.pop(submission_id, None)
+            if existing is not None:
+                existing.cancel()
+    except Exception:
+        pass
 
     _teardown(submission_id)
 
