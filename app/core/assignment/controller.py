@@ -49,15 +49,15 @@ async def create_assignment(
             testcase_url = None
         
         attachment_urls = []
-        if(attachment != None ):
+        if attachment is not None:
             for file in attachment:
                 file_bytes = await file.read()
                 _, url = upload_file(
                     f"attachment/{data.title}/{file.filename}",
-                file_bytes,
-                file.content_type
-            )
-            attachment_urls.append(url)
+                    file_bytes,
+                    file.content_type
+                )
+                attachment_urls.append(url)
         
         assignment = create_assignment_service(data, testcase_url, attachment_urls, db, current_user)
 
