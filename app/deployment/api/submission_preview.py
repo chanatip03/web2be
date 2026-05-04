@@ -137,8 +137,23 @@ def _teardown(submission_id: str) -> None:
 
     logger.info("Tearing down preview for %s (compose_project=%s)", submission_id, project)
     try:
+        from app.deployment.services.docker.client import docker_client
         if runtime.exists():
             docker_client.compose_down(str(runtime), project, remove_volumes=True)
+            
+        # Fallback manual cleanup in case compose_down fails or misses some containers
+        try:
+            containers = docker_client.client.containers.list(
+                all=True, filters={"label": f"com.docker.compose.project={project}"}
+            )
+            for c in containers:
+                try:
+                    c.remove(force=True)
+                except Exception as e:
+                    logger.warning("Failed to force remove container %s: %s", c.name, e)
+        except Exception as e:
+            logger.warning("Failed to list containers for fallback cleanup: %s", e)
+            
     except Exception as exc:
         logger.warning("compose_down failed for %s: %s", submission_id, exc)
 
@@ -288,7 +303,33 @@ async def start_preview(submission_id: str, background_tasks: BackgroundTasks, r
 
     # Already running — return fast
     if existing and existing.status == "running" and existing.seconds_remaining > 0:
-        preview_url = existing.preview_url
+        # Verify containers actually exist
+        is_running = False
+        try:
+            from app.deployment.services.docker.client import docker_client
+            containers = docker_client.client.containers.list(
+                filters={"label": f"com.docker.compose.project={existing.compose_project}"}
+            )
+            is_running = any(c.status == "running" for c in containers)
+        except Exception:
+            pass
+
+        if is_running:
+            preview_url = existing.preview_url
+            if preview_url and not preview_url.startswith("http"):
+                preview_url = f"{str(request.base_url).rstrip('/')}{preview_url}"
+                
+            return {
+                "status": "running",
+                "preview_url": preview_url,
+                "expires_at": existing.expires_at.isoformat(),
+                "seconds_remaining": existing.seconds_remaining,
+                "service_ports": existing.service_ports,
+            }
+        else:
+            logger.info("Containers for %s stopped unexpectedly, forcing restart", submission_id)
+            existing.status = "stopped"
+            _sessions[submission_id] = existing
         if preview_url and not preview_url.startswith("http"):
             preview_url = f"{str(request.base_url).rstrip('/')}{preview_url}"
             
@@ -391,6 +432,24 @@ async def get_preview_status(submission_id: str, request: Request):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No active preview session for submission {submission_id}. POST /preview/start first.",
         )
+
+    if session.status == "running":
+        # Verify containers actually exist
+        is_running = False
+        try:
+            from app.deployment.services.docker.client import docker_client
+            containers = docker_client.client.containers.list(
+                filters={"label": f"com.docker.compose.project={session.compose_project}"}
+            )
+            is_running = any(c.status == "running" for c in containers)
+        except Exception:
+            pass
+
+        if not is_running:
+            logger.info("Containers for %s stopped unexpectedly", submission_id)
+            session.status = "stopped"
+            session.error = "Container was stopped or deleted."
+            _sessions[submission_id] = session
 
     preview_url = session.preview_url
     if preview_url and not preview_url.startswith("http"):

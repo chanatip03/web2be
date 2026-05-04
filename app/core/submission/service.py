@@ -1415,11 +1415,27 @@ async def activate_project_service(
     existing = _sessions.get(submission_id)
     
     if existing and existing.status == "running" and existing.seconds_remaining > 0:
-        return {
-            "status": "running",
-            "preview_url": existing.preview_url,
-            "seconds_remaining": existing.seconds_remaining,
-        }
+        is_running = False
+        try:
+            from app.deployment.services.docker.client import docker_client
+            containers = docker_client.client.containers.list(
+                filters={"label": f"com.docker.compose.project={existing.compose_project}"}
+            )
+            is_running = any(c.status == "running" for c in containers)
+        except Exception:
+            pass
+
+        if is_running:
+            return {
+                "status": "running",
+                "preview_url": existing.preview_url,
+                "seconds_remaining": existing.seconds_remaining,
+            }
+        else:
+            logger = logging.getLogger(__name__)
+            logger.info("Containers for %s stopped unexpectedly, forcing restart", submission_id)
+            existing.status = "stopped"
+            _sessions[submission_id] = existing
         
     if existing and existing.status == "starting":
         return {
