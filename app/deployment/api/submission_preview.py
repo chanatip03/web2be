@@ -235,6 +235,9 @@ def _launch_bundle(submission_id: str) -> PreviewSession:
                 # Removed HTTPS/ngrok check to allow direct port access
                     
                 candidate = f"{_p.scheme}://{_p.hostname}:{host_port}"
+                if sp.get("service") in ("backend", "api"):
+                    candidate += "/docs"
+                    
                 if sp.get("service") == "frontend":
                     direct_url = candidate
                     break

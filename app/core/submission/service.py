@@ -1524,7 +1524,11 @@ async def activate_project_service(
                     base = (settings.public_base_url or "http://localhost").rstrip("/")
                     _p = _urlparse(base)
                     # Removed HTTPS/ngrok check to allow direct port access
-                    direct_url = f"{_p.scheme}://{_p.hostname}:{host_port}"
+                    candidate = f"{_p.scheme}://{_p.hostname}:{host_port}"
+                    if sp.get("service") in ("backend", "api"):
+                        candidate += "/docs"
+                        
+                    direct_url = candidate
                     if sp.get("service") == "frontend":
                         break  # prefer frontend port
 
@@ -1536,7 +1540,10 @@ async def activate_project_service(
                     base = (settings.public_base_url or "http://localhost").rstrip("/")
                     _p = _urlparse(base)
                     # Removed HTTPS/ngrok check
-                    direct_url = f"{_p.scheme}://{_p.hostname}:{host_port}"
+                    candidate = f"{_p.scheme}://{_p.hostname}:{host_port}"
+                    if sp.get("service") in ("backend", "api"):
+                        candidate += "/docs"
+                    direct_url = candidate
 
             session.preview_url = direct_url or f"/preview/{submission_id}/"
             dep.preview_url = session.preview_url
