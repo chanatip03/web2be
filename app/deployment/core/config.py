@@ -4,7 +4,15 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-_BASE_DIR = Path(__file__).resolve().parent.parent
+# config.py lives at:  <repo_root>/app/deployment/core/config.py
+# parents[0] = core/
+# parents[1] = deployment/
+# parents[2] = app/
+# parents[3] = <repo_root>  ← workdir inside Docker (/app)
+_BASE_DIR = Path(__file__).resolve().parents[3]
+
+# .env lives at <repo_root>/.env  (same level as docker-compose.yml)
+_ENV_FILE = _BASE_DIR / ".env"
 
 
 class Settings(BaseSettings):
@@ -49,8 +57,10 @@ class Settings(BaseSettings):
     readiness_timeout_seconds: int = 45
     readiness_poll_interval_seconds: float = 2.0
     readiness_probe_paths: str = "/health,/healthz,/api/health,/status,/ping,/api,/"
-    preview_ttl_seconds: int = 10 * 60
+    preview_ttl_seconds: int = 5 * 60
     stopped_deployment_cleanup_delay_seconds: int = 10 * 60
+    # Auto-stop delay after submission pipeline finishes or container is activated
+    container_auto_stop_delay_seconds: int = 5 * 60
 
     # ── Bundles ─────────────────────────────────────────────────
     # If false, bundle creation will NOT pull missing DB base images.
@@ -58,7 +68,7 @@ class Settings(BaseSettings):
     bundle_allow_pull_db_image: bool = False
 
     model_config = SettingsConfigDict(
-        env_file=str(_BASE_DIR / ".env"),
+        env_file=str(_ENV_FILE),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -67,11 +77,12 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# Resolve relative paths against backend_v3 directory
+# Resolve relative paths against repo root (workdir = /app inside Docker)
 for attr in ("data_dir", "projects_dir", "deployments_dir"):
     p = Path(getattr(settings, attr))
     if not p.is_absolute():
         setattr(settings, attr, str((_BASE_DIR / p).resolve()))
+
 
 # Ensure directories exist
 for d in (settings.data_dir, settings.projects_dir, settings.deployments_dir):
