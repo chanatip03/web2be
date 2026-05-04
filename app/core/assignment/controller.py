@@ -113,7 +113,7 @@ def get_assignments(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get("/{assignment_id}", response_model=AssignmentResponse)
+@router.get("/detail/{assignment_id}", response_model=AssignmentResponse)
 def get_assignment_by_id(
     assignment_id: int,
      db: Annotated[Session, Depends(get_db)],
