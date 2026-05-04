@@ -30,7 +30,7 @@ async def connect_discord(
             detail="Only students can link Discord account",
         )
 
-    state = generate_oauth_state()
+    state = generate_oauth_state(current_user["id"])
     authorize_url = build_discord_authorize_url(state)
 
     response = RedirectResponse(url=authorize_url)
@@ -52,7 +52,6 @@ async def discord_callback(
     code: str | None = None,
     state: str | None = None,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     if not code:
         raise HTTPException(status_code=400, detail="Missing code")
@@ -61,7 +60,14 @@ async def discord_callback(
     if not state or not saved_state or state != saved_state:
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
 
-    student = get_student_by_user_id(db, current_user["id"])
+    from .service import decode_oauth_state
+    decoded = decode_oauth_state(state)
+    if not decoded or "uid" not in decoded:
+        raise HTTPException(status_code=400, detail="Invalid OAuth state payload")
+        
+    user_id = decoded["uid"]
+
+    student = get_student_by_user_id(db, user_id)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
@@ -69,7 +75,7 @@ async def discord_callback(
     discord_user_id = discord_user["id"]
 
     existing = get_student_by_discord_user_id(db, discord_user_id)
-    if existing and existing.user_id != current_user["id"]:
+    if existing and existing.user_id != user_id:
         raise HTTPException(
             status_code=400,
             detail="Discord account already linked to another user",
@@ -77,7 +83,7 @@ async def discord_callback(
 
     updated_student = link_discord_user(
         db=db,
-        user_id=current_user["id"],
+        user_id=user_id,
         discord_user_id=discord_user_id,
     )
     if not updated_student:

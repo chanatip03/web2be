@@ -13,6 +13,9 @@ DISCORD_REDIRECT_URI = os.getenv("DISCORD_REDIRECT_URI", "http://localhost:8000/
 FRONTEND_URL = os.getenv("DISCORD_FRONTEND_URL", "http://localhost:3000/profile")
 
 
+import base64
+import json
+
 def build_discord_authorize_url(state: str) -> str:
     if not DISCORD_CLIENT_ID or not DISCORD_REDIRECT_URI:
         raise HTTPException(
@@ -32,8 +35,18 @@ def build_discord_authorize_url(state: str) -> str:
     return "https://discord.com/oauth2/authorize?" + urlencode(params)
 
 
-def generate_oauth_state() -> str:
-    return secrets.token_urlsafe(32)
+def generate_oauth_state(user_id: int) -> str:
+    nonce = secrets.token_urlsafe(16)
+    payload = json.dumps({"uid": user_id, "nonce": nonce})
+    return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+
+def decode_oauth_state(state: str) -> dict | None:
+    try:
+        padding = "=" * (4 - len(state) % 4)
+        payload = base64.urlsafe_b64decode(state + padding).decode()
+        return json.loads(payload)
+    except Exception:
+        return None
 
 
 async def exchange_code_for_user(code: str) -> dict:
