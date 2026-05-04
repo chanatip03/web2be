@@ -22,6 +22,7 @@ from .service import (
 
 router = APIRouter(prefix="/group", tags=["Group"])
 
+@router.post("", response_model=GroupResponse)
 @router.post("/", response_model=GroupResponse)
 def create_group_endpoint(
     payload: CreateGroupRequest,
