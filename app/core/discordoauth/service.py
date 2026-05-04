@@ -1,3 +1,4 @@
+import os
 import secrets
 from urllib.parse import urlencode
 
@@ -6,10 +7,10 @@ from fastapi import HTTPException
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
 
-DISCORD_CLIENT_ID = "1486465516406182090"
-DISCORD_CLIENT_SECRET = "bMlnLLOySm_-c8puBqfIcVInLNxMryOT"
-DISCORD_REDIRECT_URI = "http://localhost:8000/api/discord/callback"
-FRONTEND_URL = "http://localhost:3000/profile"
+DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "1486465516406182090")
+DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "bMlnLLOySm_-c8puBqfIcVInLNxMryOT")
+DISCORD_REDIRECT_URI = os.getenv("DISCORD_REDIRECT_URI", "http://localhost:8000/api/discord/callback")
+FRONTEND_URL = os.getenv("DISCORD_FRONTEND_URL", "http://localhost:3000/profile")
 
 
 def build_discord_authorize_url(state: str) -> str:
