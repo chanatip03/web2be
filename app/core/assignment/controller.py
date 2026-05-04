@@ -23,10 +23,17 @@ from .service import (
     get_assignment_testcase_content_service
 )
 from app.core.generatetestcase.services.generator import generate_robot_suite_content
+import re
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/assignment", tags=["Assignment"])
+
+
+
+def safe_path(text: str):
+    return re.sub(r'[^a-zA-Z0-9_-]', '_', text)
+
 
 @router.post("", response_model=AssignmentResponse)
 @router.post("/", response_model=AssignmentResponse)
@@ -36,69 +43,75 @@ async def create_assignment(
     data: Annotated[CreateAssignmentRequest, Depends(CreateAssignmentRequest.as_form)],
     testcase: Annotated[UploadFile | None, File()] = None,
     attachment: Annotated[List[UploadFile] | None, File()] = None,
-    ):
+):
     try:
+        safe_title = safe_path(data.title or "untitled")
+
+        # ── Upload testcase ──
+        testcase_url = None
         if testcase:
             file_bytes = await testcase.read()
             _, testcase_url = upload_file(
-            f"testcase/{data.title}/{testcase.filename}",
-            file_bytes,
-            testcase.content_type
+                f"testcase/{safe_title}/{testcase.filename}",
+                file_bytes,
+                testcase.content_type
             )
-        else:
-            testcase_url = None
-        
+
+        # ── Upload attachments ──
         attachment_urls = []
-        if attachment is not None:
+        if attachment:
             for file in attachment:
                 file_bytes = await file.read()
                 _, url = upload_file(
-                    f"attachment/{data.title}/{file.filename}",
+                    f"attachment/{safe_title}/{file.filename}",
                     file_bytes,
                     file.content_type
                 )
                 attachment_urls.append(url)
-        
-        assignment = create_assignment_service(data, testcase_url, attachment_urls, db, current_user)
 
-        # ── Auto-generate Robot Framework testcase from title + description ──
+        # ── Create assignment ──
+        assignment = create_assignment_service(
+            data, testcase_url, attachment_urls, db, current_user
+        )
+
+        # ── Auto-generate testcase ──
         if not testcase_url:
             try:
                 prompt = f"Assignment title: {data.title}"
                 if data.description:
                     prompt += f"\nAssignment description: {data.description}"
-                prompt += (
-                    "\nGeneration request: Create Robot Framework testcases that specifically validate "
-                    "this assignment's required behavior and important edge cases."
-                )
+                prompt += "\nGenerate Robot Framework testcases."
+
                 context_id = f"assignment-{assignment.id}"
+
                 suite_content = await generate_robot_suite_content(
                     context_id=context_id,
                     user_prompt=prompt,
                 )
+
                 assignment = update_assignment_testcase_service(
                     assignment.id, suite_content, db, current_user
                 )
+
             except Exception as gen_err:
-                # Non-fatal: log and continue — assignment is still created
                 logger.warning(
                     "Auto-generate testcase failed for assignment %s: %s",
-                    assignment.id, gen_err,
+                    assignment.id,
+                    gen_err,
                 )
 
         return assignment
+
     except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+    except Exception:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(e)
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create assignment: {str(e)}"
+            status_code=500,
+            detail="Failed to create assignment"
         )
 
-@router.get("/{classroom_id}", response_model=List[AssignmentResponse])
+@router.get("/classroom/{classroom_id}", response_model=List[AssignmentResponse])
 def get_assignments(
     classroom_id: int,
     db: Annotated[Session, Depends(get_db)],
@@ -116,62 +129,65 @@ def get_assignments(
 @router.get("/detail/{assignment_id}", response_model=AssignmentResponse)
 def get_assignment_by_id(
     assignment_id: int,
-     db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[Dict, Depends(get_current_user)],
 ):
     try:
-        assignment = get_assignment_by_id_service(db, assignment_id)
-        return assignment
+        return get_assignment_by_id_service(db, assignment_id)
+
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+    except Exception:
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.put("/{assignment_id}", response_model=AssignmentResponse)
 async def update_assignment(
-    assignment_id: int, 
+    assignment_id: int,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[Dict, Depends(get_current_user)],
     data: Annotated[UpdateAssignmentRequest, Depends(UpdateAssignmentRequest.as_form)],
     testcase: Annotated[UploadFile | None, File()] = None,
-    attachment: Annotated[List[UploadFile], File()] = [], 
-    ):
+    attachment: Annotated[List[UploadFile] | None, File()] = None,
+):
     try:
-        testcase_url = None
+        safe_title = safe_path(data.title or "untitled")
 
+        testcase_url = None
         if testcase:
             file_bytes = await testcase.read()
-            safe_title = data.title or "untitled"
-
             _, testcase_url = upload_file(
-            f"testcase/{safe_title}/{testcase.filename}",
-            file_bytes,
-            testcase.content_type
-        )
-        
-        attachment_urls = []
-        for file in attachment:
-            file_bytes = await file.read()
-            _, url = upload_file(
-                f"attachment/{data.title}/{file.filename}",
-            file_bytes,
-            file.content_type
+                f"testcase/{safe_title}/{testcase.filename}",
+                file_bytes,
+                testcase.content_type
             )
-            attachment_urls.append(url)
-        
-        assignment = update_assignment_service(assignment_id,data, testcase_url, attachment_urls, db, current_user)
-        
-        return assignment
+
+        attachment_urls = []
+        if attachment:
+            for file in attachment:
+                file_bytes = await file.read()
+                _, url = upload_file(
+                    f"attachment/{safe_title}/{file.filename}",
+                    file_bytes,
+                    file.content_type
+                )
+                attachment_urls.append(url)
+
+        return update_assignment_service(
+            assignment_id,
+            data,
+            testcase_url,
+            attachment_urls,
+            db,
+            current_user
+        )
+
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(e)
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update assignment: {str(e)}"
-        )
+        raise HTTPException(status_code=403, detail=str(e))
+
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to update assignment")
 
 @router.put("/{assignment_id}/testcase", response_model=AssignmentResponse)
 async def update_assignment_testcase(
@@ -188,10 +204,10 @@ async def update_assignment_testcase(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=str(e)
         )
-    except Exception as e:
+    except Exception:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update assignment testcase: {str(e)}"
+            status_code=500,
+            detail="Failed to update assignment testcase"
         )
 
 @router.get("/{assignment_id}/testcase", response_class=PlainTextResponse)
@@ -220,8 +236,8 @@ def delete_assignment(
         return assignment
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to delete assignment")
     
 # @router.get("/project_types")
 # def get_project_types():
