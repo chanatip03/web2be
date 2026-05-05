@@ -237,7 +237,7 @@ def _launch_bundle(submission_id: str) -> PreviewSession:
                 display_id = session.display_id or submission_id
                 candidate = f"{_p.scheme}://{_p.hostname}:{host_port}"
                 if sp.get("service") in ("backend", "api"):
-                    candidate = f"{base}/preview/{display_id}/swagger"
+                    candidate = f"/preview/{display_id}/swagger"
                     
                 if sp.get("service") == "frontend":
                     direct_url = candidate

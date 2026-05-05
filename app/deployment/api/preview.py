@@ -398,6 +398,11 @@ def _normalize_joined_path(prefix: str, subpath: str) -> str:
 
 def _extract_backend_endpoints_from_files(project_id: str) -> list[dict[str, Any]]:
     root = Path(settings.projects_dir) / project_id
+    if not root.exists():
+        rt_root = Path(settings.projects_dir) / f"{project_id}_preview_rt"
+        if rt_root.exists():
+            root = rt_root
+
     project = project_store.get(project_id)
     backend_path = None
     if project and project.analysis:
