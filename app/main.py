@@ -15,7 +15,7 @@ import logging
 
 import asyncio
 from app.core.plagiarism.scheduler import start_plagiarism_scheduler
-
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 app = FastAPI(title="WEB2 API",redirect_slashes=False)
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 @app.on_event("startup")
 async def start_background_tasks():
     asyncio.create_task(start_plagiarism_scheduler())
+
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["*"]
+)
 
 app.add_middleware(
     CORSMiddleware,
