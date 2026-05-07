@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
 
 from app.db.database import SessionLocal
-from app.models.schema import Assignment, Project
+from app.models.schema import Assignment, Project, Student, User, Group, GroupMember
 from app.utils.r2 import get_file_bytes, R2_PUBLIC_URL
 from app.utils.archive import unzip_file
 from app.core.plagiarism.repository import run_jplag_service, extract_avg_comparisons, BASE_PATH
@@ -69,8 +69,8 @@ async def check_assignment_plagiarism(db: Session, assignment: Assignment):
     projects = (
         db.query(Project)
         .options(
-            joinedload(Project.student).joinedload("user"),
-            joinedload(Project.group).joinedload("members").joinedload("student").joinedload("user"),
+            joinedload(Project.student).joinedload(Student.user),
+            joinedload(Project.group).joinedload(Group.members).joinedload(GroupMember.student).joinedload(Student.user),
         )
         .filter(
             Project.assignment_id == assignment.id,
