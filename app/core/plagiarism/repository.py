@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 
 BASE_PATH = os.getcwd()
 
-WORK_DIR = os.path.abspath(os.path.join(BASE_PATH, "app" ,"data", "submissions"))
-RESULT_DIR = os.path.abspath(os.path.join(BASE_PATH, "app" ,"data", "results"))
+WORK_DIR = os.path.abspath(os.path.join(BASE_PATH, "data", "submissions"))
+RESULT_DIR = os.path.abspath(os.path.join(BASE_PATH ,"data", "results"))
 
 JAVA = "java"
 JPLAG_JAR = os.path.abspath(r"app/core/plagiarism/jplag/jplag.jar")
