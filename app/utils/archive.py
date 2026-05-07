@@ -38,7 +38,12 @@ def unzip_file(zip_bytes: bytes, extract_to: str | None = None) -> str:
         import uuid
         extract_to = str(uuid.uuid4())
 
-    extract_path = os.path.join(SUBMISSIONS_DIR, extract_to)
+    # Support absolute paths (e.g. plagiarism_temp dir) — do NOT join with SUBMISSIONS_DIR
+    if os.path.isabs(extract_to):
+        extract_path = extract_to
+    else:
+        extract_path = os.path.join(SUBMISSIONS_DIR, extract_to)
+
     os.makedirs(extract_path, exist_ok=True)
 
     import io

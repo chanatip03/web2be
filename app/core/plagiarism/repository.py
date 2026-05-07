@@ -94,6 +94,7 @@ def run_jplag_service(assignment_id: int = 0, language: str = "javascript", work
         raise RuntimeError(f"Service Execution Error: {str(e)}")
     
 def extract_avg_comparisons(jplag_file: str):
+    import shutil
     extract_dir = jplag_file.replace(".jplag", "_extracted")
     comparisons_dir = os.path.join(extract_dir, "comparisons")
 
@@ -101,6 +102,7 @@ def extract_avg_comparisons(jplag_file: str):
         zip_ref.extractall(extract_dir)
 
     if not os.path.exists(comparisons_dir):
+        shutil.rmtree(extract_dir, ignore_errors=True)
         return []
 
     similarity_map = {}
@@ -141,4 +143,6 @@ def extract_avg_comparisons(jplag_file: str):
                 "avg_similarity": avg
             })
 
+    # Cleanup extracted directory
+    shutil.rmtree(extract_dir, ignore_errors=True)
     return result

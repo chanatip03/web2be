@@ -4,7 +4,7 @@ import os
 import shutil
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
 
 from app.db.database import SessionLocal
@@ -14,6 +14,12 @@ from app.utils.archive import unzip_file
 from app.core.plagiarism.repository import run_jplag_service, extract_avg_comparisons, BASE_PATH
 
 logger = logging.getLogger(__name__)
+
+# Track assignments that have failed JPlag so we can retry later instead of
+# permanently marking them as checked with an empty result.
+_jplag_failure_count: dict[int, int] = {}
+MAX_JPLAG_RETRIES = 3
+
 
 def _extract_r2_key(url: str) -> str:
     if not url:
@@ -25,6 +31,7 @@ def _extract_r2_key(url: str) -> str:
     if "submissions/" in url:
         return url[url.find("submissions/"):]
     return url
+
 
 def _flatten_directory(path: str):
     """
@@ -45,7 +52,8 @@ def _flatten_directory(path: str):
                 # Recurse in case it's nested multiple levels
                 _flatten_directory(path)
     except Exception:
-        pass # Safety check to prevent crashing the whole job if flattening fails
+        pass  # Safety check to prevent crashing the whole job if flattening fails
+
 
 async def check_assignment_plagiarism(db: Session, assignment: Assignment):
     logger.info(f"Starting plagiarism check for Assignment {assignment.id}")
@@ -57,11 +65,24 @@ async def check_assignment_plagiarism(db: Session, assignment: Assignment):
     if assignment.project_type and assignment.project_type.name and assignment.project_type.name.lower() in {"fe", "frontend", "frontend-only"}:
         language_name = "frontend"
     
-    # 2. Get all projects (submissions) for this assignment
-    projects = db.query(Project).filter(Project.assignment_id == assignment.id).all()
+    # 2. Get all non-deleted projects (submissions) for this assignment
+    projects = (
+        db.query(Project)
+        .options(
+            joinedload(Project.student).joinedload("user"),
+            joinedload(Project.group).joinedload("members").joinedload("student").joinedload("user"),
+        )
+        .filter(
+            Project.assignment_id == assignment.id,
+            Project.deleted_date.is_(None),
+            Project.project_source_url.isnot(None),
+        )
+        .all()
+    )
+
     if not projects:
         logger.info(f"No submissions found for Assignment {assignment.id}. Skipping.")
-        assignment.plagiarism_result = [] # Set to empty to mark as checked
+        assignment.plagiarism_result = []  # Set to empty to mark as checked
         db.commit()
         return
 
@@ -79,14 +100,15 @@ async def check_assignment_plagiarism(db: Session, assignment: Assignment):
         # 4. Download and extract each project
         valid_submissions = 0
         for project in projects:
-            if not project.project_source_url:
-                continue
-                
-            folder_name = f"student_{project.student_id}" if project.student_id else f"group_{project.group_id}"
-            if not folder_name:
+            # Determine folder name
+            if project.student_id:
+                folder_name = f"student_{project.student_id}"
+            elif project.group_id:
+                folder_name = f"group_{project.group_id}"
+            else:
                 folder_name = f"project_{project.id}"
-                
-            # Store the actual name for the result mapping
+
+            # Store the actual display name for result mapping
             if project.group_id and project.group:
                 name_mapping[folder_name] = project.group.name
             elif project.student_id and project.student and project.student.user:
@@ -99,16 +121,21 @@ async def check_assignment_plagiarism(db: Session, assignment: Assignment):
             try:
                 r2_key = _extract_r2_key(project.project_source_url)
                 if not r2_key:
+                    logger.warning(f"Could not extract R2 key from URL: {project.project_source_url}")
                     continue
                 
+                logger.info(f"Downloading project {project.id} from R2 key: {r2_key}")
                 zip_bytes = get_file_bytes(r2_key)
                 
-                # unzip_file takes bytes and an extract_to path
+                # unzip_file now supports absolute paths
                 unzip_file(zip_bytes, extract_to=extract_path)
                 _flatten_directory(extract_path)
                 valid_submissions += 1
+                logger.info(f"Extracted project {project.id} → {extract_path}")
             except Exception as e:
                 logger.error(f"Failed to download/extract project {project.id} for plagiarism check: {e}")
+
+        logger.info(f"Assignment {assignment.id}: {valid_submissions} valid submissions ready for JPlag")
 
         # 5. Run JPlag if we have enough submissions
         if valid_submissions >= 2:
@@ -130,14 +157,20 @@ async def check_assignment_plagiarism(db: Session, assignment: Assignment):
 
                 assignment.plagiarism_result = result_json
                 db.commit()
-                logger.info(f"Plagiarism check completed for Assignment {assignment.id}")
+                # Clear failure count on success
+                _jplag_failure_count.pop(assignment.id, None)
+                logger.info(f"Plagiarism check completed for Assignment {assignment.id}: {len(result_json)} comparisons")
             except Exception as e:
-                logger.error(f"JPlag failed for Assignment {assignment.id}: {e}")
-                # Mark as empty array so we don't infinitely retry failing assignments
-                assignment.plagiarism_result = [] 
-                db.commit()
+                fail_count = _jplag_failure_count.get(assignment.id, 0) + 1
+                _jplag_failure_count[assignment.id] = fail_count
+                logger.error(f"JPlag failed for Assignment {assignment.id} (attempt {fail_count}/{MAX_JPLAG_RETRIES}): {e}")
+                if fail_count >= MAX_JPLAG_RETRIES:
+                    logger.error(f"Max retries reached for Assignment {assignment.id}. Marking as empty.")
+                    assignment.plagiarism_result = []
+                    db.commit()
+                # else: leave plagiarism_result = None so scheduler retries next run
         else:
-            logger.info(f"Not enough valid submissions to run JPlag for Assignment {assignment.id}")
+            logger.info(f"Not enough valid submissions ({valid_submissions}) to run JPlag for Assignment {assignment.id}")
             assignment.plagiarism_result = []
             db.commit()
 
