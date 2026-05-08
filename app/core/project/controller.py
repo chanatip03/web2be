@@ -12,18 +12,17 @@ from .service import (
     get_project_source_code_service
 )
 
-#add get all
-
 router = APIRouter(prefix="/project", tags=["Project"])
 
-@router.get("", response_model=List[ProjectResponse])
-@router.get("/", response_model=List[ProjectResponse])
-def get_all_projects_endpoint(
+# NOTE: /assignment/{id} must come BEFORE /{project_id} to avoid route shadowing
+@router.get("/assignment/{assignment_id}", response_model=List[ProjectResponse])
+def get_projects_by_assignment_endpoint(
+    assignment_id: int,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
     try:
-        data = get_projects_service(db, current_user)
+        data = get_projects_by_assignment_service(db, current_user, assignment_id)
         return data
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -48,18 +47,6 @@ def get_project_source_code_endpoint(
 ):
     try:
         data = get_project_source_code_service(db, current_user, project_id)
-        return data
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-
-@router.get("/assignment/{assignment_id}", response_model=List[ProjectResponse])
-def get_projects_by_assignment_endpoint(
-    assignment_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    try:
-        data = get_projects_by_assignment_service(db, current_user, assignment_id)
         return data
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
